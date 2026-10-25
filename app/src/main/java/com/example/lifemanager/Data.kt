@@ -57,6 +57,27 @@ data class Account(
     @ColumnInfo(defaultValue = "0") val unitPrice: Long = 0
 )
 
+@Entity(tableName = "budgets")
+data class Budget(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val category: String,
+    val limitAmount: Long
+)
+
+@Entity(tableName = "goals")
+data class Goal(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val target: Long,
+    val saved: Long
+)
+
+@Entity(tableName = "snapshots")
+data class Snapshot(
+    @PrimaryKey val day: Long,
+    val net: Long
+)
+
 @Dao
 interface TxnDao {
     @Query("SELECT * FROM transactions ORDER BY date DESC")
@@ -65,6 +86,7 @@ interface TxnDao {
     suspend fun list(): List<Txn>
     @Insert suspend fun insert(t: Txn)
     @Insert suspend fun insertAll(l: List<Txn>)
+    @Update suspend fun update(t: Txn)
     @Delete suspend fun delete(t: Txn)
     @Query("DELETE FROM transactions")
     suspend fun clear()
@@ -113,6 +135,42 @@ interface AccountDao {
     suspend fun clear()
 }
 
+@Dao
+interface BudgetDao {
+    @Query("SELECT * FROM budgets ORDER BY id")
+    fun all(): Flow<List<Budget>>
+    @Query("SELECT * FROM budgets")
+    suspend fun list(): List<Budget>
+    @Insert suspend fun insert(b: Budget)
+    @Insert suspend fun insertAll(l: List<Budget>)
+    @Update suspend fun update(b: Budget)
+    @Delete suspend fun delete(b: Budget)
+    @Query("DELETE FROM budgets")
+    suspend fun clear()
+}
+
+@Dao
+interface GoalDao {
+    @Query("SELECT * FROM goals ORDER BY id")
+    fun all(): Flow<List<Goal>>
+    @Query("SELECT * FROM goals")
+    suspend fun list(): List<Goal>
+    @Insert suspend fun insert(g: Goal)
+    @Insert suspend fun insertAll(l: List<Goal>)
+    @Update suspend fun update(g: Goal)
+    @Delete suspend fun delete(g: Goal)
+    @Query("DELETE FROM goals")
+    suspend fun clear()
+}
+
+@Dao
+interface SnapshotDao {
+    @Query("SELECT * FROM snapshots ORDER BY day")
+    fun all(): Flow<List<Snapshot>>
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(s: Snapshot)
+}
+
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL(
@@ -145,9 +203,29 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `budgets` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`category` TEXT NOT NULL, `limitAmount` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `goals` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`name` TEXT NOT NULL, `target` INTEGER NOT NULL, `saved` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `snapshots` (`day` INTEGER NOT NULL, " +
+                "`net` INTEGER NOT NULL, PRIMARY KEY(`day`))"
+        )
+    }
+}
+
 @Database(
-    entities = [Txn::class, TaskItem::class, Food::class, Account::class],
-    version = 5,
+    entities = [
+        Txn::class, TaskItem::class, Food::class, Account::class,
+        Budget::class, Goal::class, Snapshot::class
+    ],
+    version = 6,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -155,12 +233,18 @@ abstract class AppDb : RoomDatabase() {
     abstract fun taskDao(): TaskDao
     abstract fun foodDao(): FoodDao
     abstract fun accountDao(): AccountDao
+    abstract fun budgetDao(): BudgetDao
+    abstract fun goalDao(): GoalDao
+    abstract fun snapshotDao(): SnapshotDao
 
     companion object {
         @Volatile private var inst: AppDb? = null
         fun get(ctx: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "life.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
+                    MIGRATION_4_5, MIGRATION_5_6
+                )
                 .build().also { inst = it }
         }
     }
@@ -307,8 +391,32 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val tasks = db.taskDao().all()
     val todayFoods = db.foodDao().since(startOfDay())
     val accounts = db.accountDao().all()
+    val budgets = db.budgetDao().all()
+    val goals = db.goalDao().all()
+    val snapshots = db.snapshotDao().all()
 
-    // ثبت تراکنش + تغییر خودکار موجودی حساب (همه با هم، در یک تراکنش دیتابیس)
+    init {
+        // هر بار حساب‌ها عوض شوند، ثروت خالص امروز ذخیره می‌شود (برای نمودار روند)
+        viewModelScope.launch {
+            db.accountDao().all().collect { list ->
+                if (list.isNotEmpty()) {
+                    db.snapshotDao().upsert(Snapshot(startOfDay(), computeWealth(list).net))
+                }
+            }
+        }
+    }
+
+    // اعمال (یا برگرداندن) اثر یک تراکنش روی موجودی حساب
+    private suspend fun applyToAccount(accId: Long, income: Boolean, amount: Long, reverse: Boolean) {
+        if (accId <= 0) return
+        val acc = db.accountDao().getById(accId) ?: return
+        var delta = if (income) amount else -amount
+        if (reverse) delta = -delta
+        val signed = if (acc.type == "بدهی") -delta else delta
+        db.accountDao().update(acc.copy(balance = acc.balance + signed))
+    }
+
+    // ثروت و موجودی حساب‌ها همراه با ثبت تراکنش، در یک تراکنش دیتابیس
     // فقط حساب‌های نقد/بانک/بدهی قابل انتخاب‌اند (نه طلا، ارز، سهام)
     fun addTxn(
         amount: Long, income: Boolean, category: String, note: String,
@@ -320,12 +428,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
                 if (accountId > 0 && usable.any { it.id == accountId }) accountId
                 else usable.firstOrNull()?.id
                     ?: db.accountDao().insertGetId(Account(name = "کیف پول", type = "نقد", balance = 0))
-            val acc = db.accountDao().getById(accId)
-            if (acc != null) {
-                val delta = if (income) amount else -amount
-                val signed = if (acc.type == "بدهی") -delta else delta
-                db.accountDao().update(acc.copy(balance = acc.balance + signed))
-            }
+            applyToAccount(accId, income, amount, false)
             db.txnDao().insert(
                 Txn(
                     amount = amount, isIncome = income, category = category,
@@ -335,20 +438,22 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ویرایش تراکنش: اثر قبلی برگردانده و اثر جدید اعمال می‌شود
+    fun updateTxn(old: Txn, amount: Long, category: String, note: String, date: Long) =
+        viewModelScope.launch {
+            db.withTransaction {
+                applyToAccount(old.accountId, old.isIncome, old.amount, true)
+                applyToAccount(old.accountId, old.isIncome, amount, false)
+                db.txnDao().update(old.copy(amount = amount, category = category, note = note, date = date))
+            }
+        }
+
     // واردکردن گروهی (مثلاً پیامک): روی حساب‌ها اثر نمی‌گذارد
     fun addTxns(list: List<Txn>) = viewModelScope.launch { db.txnDao().insertAll(list) }
 
-    // حذف تراکنش + برگرداندن اثرش روی حساب
     fun delTxn(t: Txn) = viewModelScope.launch {
         db.withTransaction {
-            if (t.accountId > 0) {
-                val acc = db.accountDao().getById(t.accountId)
-                if (acc != null) {
-                    val delta = if (t.isIncome) -t.amount else t.amount
-                    val signed = if (acc.type == "بدهی") -delta else delta
-                    db.accountDao().update(acc.copy(balance = acc.balance + signed))
-                }
-            }
+            applyToAccount(t.accountId, t.isIncome, t.amount, true)
             db.txnDao().delete(t)
         }
     }
@@ -371,6 +476,23 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         }
     fun updateAccount(a: Account) = viewModelScope.launch { db.accountDao().update(a) }
     fun delAccount(a: Account) = viewModelScope.launch { db.accountDao().delete(a) }
+
+    // بودجه: اگر برای این دسته قبلاً بودجه بوده، مبلغش عوض می‌شود
+    fun setBudget(category: String, limit: Long) = viewModelScope.launch {
+        val existing = db.budgetDao().list().firstOrNull { it.category == category }
+        if (existing != null) {
+            db.budgetDao().update(existing.copy(limitAmount = limit))
+        } else {
+            db.budgetDao().insert(Budget(category = category, limitAmount = limit))
+        }
+    }
+    fun delBudget(b: Budget) = viewModelScope.launch { db.budgetDao().delete(b) }
+
+    fun addGoal(name: String, target: Long, saved: Long) =
+        viewModelScope.launch { db.goalDao().insert(Goal(name = name, target = target, saved = saved)) }
+    fun addToGoal(g: Goal, delta: Long) =
+        viewModelScope.launch { db.goalDao().update(g.copy(saved = (g.saved + delta).coerceAtLeast(0L))) }
+    fun delGoal(g: Goal) = viewModelScope.launch { db.goalDao().delete(g) }
 
     suspend fun exportJson(): String {
         val o = JSONObject()
@@ -405,6 +527,18 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             )
         }
         o.put("accounts", d)
+        val e = JSONArray()
+        db.budgetDao().list().forEach {
+            e.put(JSONObject().put("category", it.category).put("limit", it.limitAmount))
+        }
+        o.put("budgets", e)
+        val g = JSONArray()
+        db.goalDao().list().forEach {
+            g.put(
+                JSONObject().put("name", it.name).put("target", it.target).put("saved", it.saved)
+            )
+        }
+        o.put("goals", g)
         return o.toString(2)
     }
 
@@ -441,15 +575,29 @@ class MainVm(app: Application) : AndroidViewModel(app) {
                 quantity = j.optDouble("quantity", 0.0), unitPrice = j.optLong("unitPrice", 0)
             )
         }
+        val e = o.optJSONArray("budgets") ?: JSONArray()
+        val budgets = (0 until e.length()).map { i ->
+            val j = e.getJSONObject(i)
+            Budget(category = j.getString("category"), limitAmount = j.getLong("limit"))
+        }
+        val g = o.optJSONArray("goals") ?: JSONArray()
+        val goals = (0 until g.length()).map { i ->
+            val j = g.getJSONObject(i)
+            Goal(name = j.getString("name"), target = j.getLong("target"), saved = j.getLong("saved"))
+        }
         db.withTransaction {
             db.txnDao().clear()
             db.taskDao().clear()
             db.foodDao().clear()
             db.accountDao().clear()
+            db.budgetDao().clear()
+            db.goalDao().clear()
             db.accountDao().insertAll(accounts)
             db.txnDao().insertAll(txns)
             db.taskDao().insertAll(tasks)
             db.foodDao().insertAll(foods)
+            db.budgetDao().insertAll(budgets)
+            db.goalDao().insertAll(goals)
         }
     }
 }
