@@ -15,30 +15,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import java.util.Calendar
 
 val ACCOUNT_TYPES = listOf("نقد", "بانک", "طلا", "ارز", "سهام", "بدهی")
-
-fun compact(v: Long): String = when {
-    v >= 1_000_000 -> "${v / 1_000_000}م"
-    v >= 1_000 -> "${v / 1_000}ه"
-    else -> "$v"
-}
-
-@Composable
-fun FinanceHost(vm: MainVm) {
-    var sub by remember { mutableIntStateOf(0) }
-    Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(selected = sub == 0, onClick = { sub = 0 }, label = { Text("تراکنش‌ها") })
-            FilterChip(selected = sub == 1, onClick = { sub = 1 }, label = { Text("سرمایه و نمودار") })
-        }
-        if (sub == 0) TxnScreen(vm) else CapitalScreen(vm)
-    }
-}
 
 @Composable
 fun BarRow(label: String, value: Long, max: Long, color: Color) {
@@ -61,9 +39,8 @@ fun BarRow(label: String, value: Long, max: Long, color: Color) {
 }
 
 @Composable
-fun CapitalScreen(vm: MainVm) {
+fun AccountsScreen(vm: MainVm) {
     val accounts by vm.accounts.collectAsState(initial = emptyList())
-    val txns by vm.txns.collectAsState(initial = emptyList())
     var name by remember { mutableStateOf("") }
     var balance by remember { mutableStateOf("") }
     var qty by remember { mutableStateOf("") }
@@ -80,30 +57,8 @@ fun CapitalScreen(vm: MainVm) {
     val newQty = parseQty(qty)
     val newPrice = price.faToLong()
 
-    val monthAgo = System.currentTimeMillis() - 30L * 86_400_000L
-    val byCat = txns.filter { !it.isIncome && it.date >= monthAgo }
-        .groupBy { it.category.ifBlank { "بدون دسته" } }
-        .map { (k, v) -> k to v.sumOf { it.amount } }
-        .sortedByDescending { it.second }
-        .take(8)
-
-    val weekNames = listOf("", "ی", "د", "س", "چ", "پ", "ج", "ش")
-    val week = (6 downTo 0).map { back ->
-        val c = Calendar.getInstance()
-        c.add(Calendar.DAY_OF_YEAR, -back)
-        c.set(Calendar.HOUR_OF_DAY, 0)
-        c.set(Calendar.MINUTE, 0)
-        c.set(Calendar.SECOND, 0)
-        c.set(Calendar.MILLISECOND, 0)
-        val start = c.timeInMillis
-        val end = start + 86_400_000L
-        val sum = txns.filter { !it.isIncome && it.date >= start && it.date < end }.sumOf { it.amount }
-        weekNames[c.get(Calendar.DAY_OF_WEEK)] to sum
-    }
-    val weekMax = week.maxOfOrNull { it.second } ?: 0L
-
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         HeroCard(
@@ -223,36 +178,6 @@ fun CapitalScreen(vm: MainVm) {
         } else {
             val maxType = w.byType.first().second
             w.byType.forEach { BarRow(it.first, it.second, maxType, MaterialTheme.colorScheme.primary) }
-        }
-
-        HorizontalDivider()
-        Text("هزینه‌ها بر اساس دسته (۳۰ روز اخیر)", style = MaterialTheme.typography.titleMedium)
-        if (byCat.isEmpty()) {
-            Text("—")
-        } else {
-            val maxCat = byCat.first().second
-            byCat.forEach { BarRow(it.first, it.second, maxCat, MaterialTheme.colorScheme.error) }
-        }
-
-        HorizontalDivider()
-        Text("هزینه‌ی ۷ روز اخیر", style = MaterialTheme.typography.titleMedium)
-        Text("ه = هزار، م = میلیون", style = MaterialTheme.typography.bodySmall)
-        Row(
-            Modifier.fillMaxWidth().height(160.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.Bottom
-        ) {
-            week.forEach { (label, v) ->
-                val frac = if (weekMax > 0) v.toFloat() / weekMax else 0f
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(compact(v), style = MaterialTheme.typography.bodySmall)
-                    Box(
-                        Modifier.width(24.dp).height(maxOf(2f, 100f * frac).dp)
-                            .background(MaterialTheme.colorScheme.error, RoundedCornerShape(4.dp))
-                    )
-                    Text(label, style = MaterialTheme.typography.bodySmall)
-                }
-            }
         }
         Spacer(Modifier.height(16.dp))
     }
