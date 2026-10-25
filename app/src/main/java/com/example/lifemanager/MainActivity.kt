@@ -72,7 +72,7 @@ fun App(vm: MainVm = viewModel()) {
     ) { pad ->
         Box(Modifier.padding(pad)) {
             when (tab) {
-                0 -> TxnScreen(vm)
+                0 -> FinanceHost(vm)
                 1 -> TaskScreen(vm)
                 2 -> FoodScreen(vm)
                 3 -> AssistantScreen(vm)
