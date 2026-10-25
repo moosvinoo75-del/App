@@ -137,9 +137,16 @@ val CATEGORIES = listOf("خوراک", "حمل‌ونقل", "قبض", "خرید",
 @Composable
 fun TxnScreen(vm: MainVm) {
     val list by vm.txns.collectAsState(initial = emptyList())
+    val accounts by vm.accounts.collectAsState(initial = emptyList())
     var amount by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
+    var dateText by remember { mutableStateOf(todayJalali()) }
+    var dateErr by remember { mutableStateOf(false) }
+    var pickedAcc by remember { mutableStateOf(0L) }
+
+    val accId = if (accounts.any { it.id == pickedAcc }) pickedAcc else (accounts.firstOrNull()?.id ?: 0L)
+    val accName = accounts.associate { it.id to it.name }
 
     val income = list.filter { it.isIncome }.sumOf { it.amount }
     val expense = list.filter { !it.isIncome }.sumOf { it.amount }
@@ -147,8 +154,14 @@ fun TxnScreen(vm: MainVm) {
     fun add(isIncome: Boolean) {
         val a = amount.faToLong() ?: return
         if (a <= 0) return
-        vm.addTxn(a, isIncome, category.trim(), note.trim())
+        val d = parseJalali(dateText)
+        if (d == null) {
+            dateErr = true
+            return
+        }
+        vm.addTxn(a, isIncome, category.trim(), note.trim(), d, accId)
         amount = ""; category = ""; note = ""
+        dateText = todayJalali()
     }
 
     LazyColumn(
@@ -157,7 +170,7 @@ fun TxnScreen(vm: MainVm) {
     ) {
         item {
             HeroCard(
-                "موجودی کل", income - expense,
+                "تراز درآمد و هزینه", income - expense,
                 "درآمد", "+" + fmt(income),
                 "هزینه", "-" + fmt(expense)
             )
@@ -172,6 +185,29 @@ fun TxnScreen(vm: MainVm) {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    if (accounts.isEmpty()) {
+                        Text(
+                            "حسابی نداری؛ با ثبت اولین تراکنش، حساب «کیف پول» ساخته می‌شود.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text("حساب", style = MaterialTheme.typography.bodySmall)
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            accounts.forEach { a ->
+                                FilterChip(
+                                    selected = accId == a.id,
+                                    onClick = { pickedAcc = a.id },
+                                    label = { Text(a.name) }
+                                )
+                            }
+                        }
+                    }
+
                     Row(
                         Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -194,6 +230,32 @@ fun TxnScreen(vm: MainVm) {
                         label = { Text("توضیح") }, singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = dateText,
+                            onValueChange = { dateText = it; dateErr = false },
+                            label = { Text(if (dateErr) "تاریخ نامعتبر است" else "تاریخ شمسی") },
+                            isError = dateErr, singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = false,
+                            onClick = { dateText = todayJalali(); dateErr = false },
+                            label = { Text("امروز") }
+                        )
+                        FilterChip(
+                            selected = false,
+                            onClick = {
+                                dateText = jalaliText(System.currentTimeMillis() - 86_400_000L)
+                                dateErr = false
+                            },
+                            label = { Text("دیروز") }
+                        )
+                    }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = { add(true) },
@@ -241,6 +303,11 @@ fun TxnScreen(vm: MainVm) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        Text(
+                            jalaliLabel(t.date) + (accName[t.accountId]?.let { " · $it" } ?: ""),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     Text(
                         (if (t.isIncome) "+" else "-") + fmt(t.amount),
