@@ -5,14 +5,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,7 +18,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -127,200 +122,6 @@ fun HeroCard(
                 }
             }
         }
-    }
-}
-
-// ---------- تراکنش‌ها ----------
-
-val CATEGORIES = listOf("خوراک", "حمل‌ونقل", "قبض", "خرید", "درمان", "تفریح", "حقوق", "سایر")
-
-@Composable
-fun TxnScreen(vm: MainVm) {
-    val list by vm.txns.collectAsState(initial = emptyList())
-    val accounts by vm.accounts.collectAsState(initial = emptyList())
-    var amount by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
-    var dateText by remember { mutableStateOf(todayJalali()) }
-    var dateErr by remember { mutableStateOf(false) }
-    var pickedAcc by remember { mutableStateOf(0L) }
-
-    // فقط حساب‌های نقد/بانک/بدهی؛ طلا و ارز و سهام ارزششان مقدار × قیمت است
-    val usable = accounts.filter { it.type !in PRICED_TYPES }
-    val accId = if (usable.any { it.id == pickedAcc }) pickedAcc else (usable.firstOrNull()?.id ?: 0L)
-    val accName = accounts.associate { it.id to it.name }
-
-    val income = list.filter { it.isIncome }.sumOf { it.amount }
-    val expense = list.filter { !it.isIncome }.sumOf { it.amount }
-
-    fun add(isIncome: Boolean) {
-        val a = amount.faToLong() ?: return
-        if (a <= 0) return
-        val d = parseJalali(dateText)
-        if (d == null) {
-            dateErr = true
-            return
-        }
-        vm.addTxn(a, isIncome, category.trim(), note.trim(), d, accId)
-        amount = ""; category = ""; note = ""
-        dateText = todayJalali()
-    }
-
-    LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        item {
-            HeroCard(
-                "تراز درآمد و هزینه", income - expense,
-                "درآمد", "+" + fmt(income),
-                "هزینه", "-" + fmt(expense)
-            )
-        }
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("ثبت تراکنش", style = MaterialTheme.typography.titleMedium)
-                    OutlinedTextField(
-                        value = amount, onValueChange = { amount = it },
-                        label = { Text("مبلغ (تومان)") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    AmountHint(amount)
-
-                    if (usable.isEmpty()) {
-                        Text(
-                            "حساب نقد یا بانکی نداری؛ با ثبت اولین تراکنش، حساب «کیف پول» ساخته می‌شود.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        Text("حساب", style = MaterialTheme.typography.bodySmall)
-                        Row(
-                            Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            usable.forEach { a ->
-                                FilterChip(
-                                    selected = accId == a.id,
-                                    onClick = { pickedAcc = a.id },
-                                    label = { Text(a.name) }
-                                )
-                            }
-                        }
-                    }
-
-                    Row(
-                        Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        CATEGORIES.forEach { c ->
-                            FilterChip(
-                                selected = category == c,
-                                onClick = { category = c },
-                                label = { Text(c) }
-                            )
-                        }
-                    }
-                    OutlinedTextField(
-                        value = category, onValueChange = { category = it },
-                        label = { Text("دسته‌بندی (یا از بالا انتخاب کن)") }, singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = note, onValueChange = { note = it },
-                        label = { Text("توضیح") }, singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = dateText,
-                            onValueChange = { dateText = it; dateErr = false },
-                            label = { Text(if (dateErr) "تاریخ نامعتبر است" else "تاریخ شمسی") },
-                            isError = dateErr, singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                        FilterChip(
-                            selected = false,
-                            onClick = { dateText = todayJalali(); dateErr = false },
-                            label = { Text("امروز") }
-                        )
-                        FilterChip(
-                            selected = false,
-                            onClick = {
-                                dateText = jalaliText(System.currentTimeMillis() - 86_400_000L)
-                                dateErr = false
-                            },
-                            label = { Text("دیروز") }
-                        )
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { add(true) },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = IncomeColor)
-                        ) { Text("＋ درآمد") }
-                        Button(
-                            onClick = { add(false) },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = ExpenseColor)
-                        ) { Text("－ هزینه") }
-                    }
-                }
-            }
-        }
-        item { Text("تراکنش‌های اخیر", style = MaterialTheme.typography.titleMedium) }
-        if (list.isEmpty()) {
-            item {
-                Text(
-                    "هنوز تراکنشی ثبت نشده 🌱",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        items(list, key = { it.id }) { t ->
-            val c = if (t.isIncome) IncomeColor else ExpenseColor
-            Card(Modifier.fillMaxWidth()) {
-                Row(
-                    Modifier.padding(horizontal = 12.dp, vertical = 10.dp).fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        Modifier.size(40.dp).clip(CircleShape).background(c.copy(alpha = 0.15f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(if (t.isIncome) "↓" else "↑", color = c, fontWeight = FontWeight.Bold)
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(t.category.ifBlank { "بدون دسته" }, fontWeight = FontWeight.Medium)
-                        if (t.note.isNotBlank()) {
-                            Text(
-                                t.note, maxLines = 1,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Text(
-                            jalaliLabel(t.date) + (accName[t.accountId]?.let { " · $it" } ?: ""),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Text(
-                        (if (t.isIncome) "+" else "-") + fmt(t.amount),
-                        color = c, fontWeight = FontWeight.SemiBold
-                    )
-                    TextButton(onClick = { vm.delTxn(t) }) { Text("✕") }
-                }
-            }
-        }
-        item { Spacer(Modifier.height(16.dp)) }
     }
 }
 
