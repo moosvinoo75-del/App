@@ -12,6 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import java.util.Calendar
@@ -65,18 +66,19 @@ fun CapitalScreen(vm: MainVm) {
     val txns by vm.txns.collectAsState(initial = emptyList())
     var name by remember { mutableStateOf("") }
     var balance by remember { mutableStateOf("") }
+    var qty by remember { mutableStateOf("") }
+    var price by remember { mutableStateOf("") }
     var type by remember { mutableStateOf(ACCOUNT_TYPES[0]) }
     var editing by remember { mutableStateOf<Account?>(null) }
-    var editText by remember { mutableStateOf("") }
+    var editA by remember { mutableStateOf("") }
+    var editB by remember { mutableStateOf("") }
 
-    val assets = accounts.filter { it.type != "بدهی" }.sumOf { it.balance }
-    val debts = accounts.filter { it.type == "بدهی" }.sumOf { it.balance }
-    val net = assets - debts
+    // با هر تغییر حساب‌ها در دیتابیس، خودکار دوباره حساب می‌شود
+    val w = remember(accounts) { computeWealth(accounts) }
 
-    val byType = accounts.filter { it.type != "بدهی" }
-        .groupBy { it.type }
-        .map { (k, v) -> k to v.sumOf { it.balance } }
-        .sortedByDescending { it.second }
+    val priced = type in PRICED_TYPES
+    val newQty = parseQty(qty)
+    val newPrice = price.faToLong()
 
     val monthAgo = System.currentTimeMillis() - 30L * 86_400_000L
     val byCat = txns.filter { !it.isIncome && it.date >= monthAgo }
@@ -104,13 +106,17 @@ fun CapitalScreen(vm: MainVm) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                Text("ثروت خالص: ${fmt(net)}", style = MaterialTheme.typography.titleLarge)
-                Text("دارایی‌ها: ${fmt(assets)}")
-                Text("بدهی‌ها: ${fmt(debts)}")
-            }
-        }
+        HeroCard(
+            "ثروت خالص", w.net,
+            "دارایی‌ها", fmt(w.assets),
+            "بدهی‌ها", fmt(w.debts)
+        )
+        Text(
+            "ثروت خالص = ارزش همه‌ی دارایی‌ها − بدهی‌ها",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        AmountWords(w.net)
 
         if (accounts.isEmpty()) {
             Text("هنوز حسابی اضافه نکرده‌ای.", style = MaterialTheme.typography.bodySmall)
@@ -124,30 +130,34 @@ fun CapitalScreen(vm: MainVm) {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(a.name)
-                        Text(a.type, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            if (a.isPriced())
+                                "${a.type} · ${qtyText(a.quantity)} ${unitName(a.type)} × ${fmt(a.unitPrice)}"
+                            else a.type,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     Text(
-                        fmt(a.balance),
+                        fmt(a.value()),
                         color = if (a.type == "بدهی") Color(0xFFC62828) else Color.Unspecified
                     )
-                    TextButton(onClick = { editing = a; editText = a.balance.toString() }) { Text("ویرایش") }
-                    TextButton(onClick = { vm.delAccount(a) }) { Text("حذف") }
+                    TextButton(onClick = {
+                        editing = a
+                        if (a.type in PRICED_TYPES) {
+                            editA = if (a.quantity > 0) qtyText(a.quantity) else ""
+                            editB = if (a.unitPrice > 0) a.unitPrice.toString() else ""
+                        } else {
+                            editA = a.balance.toString()
+                            editB = ""
+                        }
+                    }) { Text("ویرایش") }
+                    TextButton(onClick = { vm.delAccount(a) }) { Text("✕") }
                 }
             }
         }
 
         Text("حساب جدید", style = MaterialTheme.typography.titleMedium)
-        OutlinedTextField(
-            value = name, onValueChange = { name = it },
-            label = { Text("نام (مثلاً کیف پول)") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = balance, onValueChange = { balance = it },
-            label = { Text("موجودی / ارزش") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth()
-        )
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -156,22 +166,63 @@ fun CapitalScreen(vm: MainVm) {
                 FilterChip(selected = type == t, onClick = { type = t }, label = { Text(t) })
             }
         }
+        OutlinedTextField(
+            value = name, onValueChange = { name = it },
+            label = { Text("نام (مثلاً کیف پول، سکه‌های خانه)") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (priced) {
+            OutlinedTextField(
+                value = qty, onValueChange = { qty = it },
+                label = { Text(qtyLabel(type)) }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = price, onValueChange = { price = it },
+                label = { Text(priceLabel(type)) }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
+            AmountHint(price)
+            if (newQty != null && newPrice != null) {
+                val v = Math.round(newQty * newPrice)
+                Text("ارزش کل: ${fmt(v)} تومان", fontWeight = FontWeight.SemiBold)
+                AmountWords(v)
+            }
+        } else {
+            OutlinedTextField(
+                value = balance, onValueChange = { balance = it },
+                label = { Text(if (type == "بدهی") "مبلغ بدهی" else "موجودی") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
+            AmountHint(balance)
+        }
         Button(onClick = {
-            val b = balance.faToLong()
-            if (name.isNotBlank() && b != null) {
-                vm.addAccount(name.trim(), type, b)
-                name = ""
-                balance = ""
+            if (name.isNotBlank()) {
+                if (priced) {
+                    if (newQty != null && newPrice != null) {
+                        vm.addAccount(name.trim(), type, 0L, newQty, newPrice)
+                        name = ""; qty = ""; price = ""
+                    }
+                } else {
+                    val b = balance.faToLong()
+                    if (b != null) {
+                        vm.addAccount(name.trim(), type, b, 0.0, 0L)
+                        name = ""; balance = ""
+                    }
+                }
             }
         }) { Text("افزودن حساب") }
 
         HorizontalDivider()
         Text("دارایی‌ها بر اساس نوع", style = MaterialTheme.typography.titleMedium)
-        if (byType.isEmpty()) {
+        if (w.byType.isEmpty()) {
             Text("—")
         } else {
-            val maxType = byType.first().second
-            byType.forEach { BarRow(it.first, it.second, maxType, MaterialTheme.colorScheme.primary) }
+            val maxType = w.byType.first().second
+            w.byType.forEach { BarRow(it.first, it.second, maxType, MaterialTheme.colorScheme.primary) }
         }
 
         HorizontalDivider()
@@ -207,19 +258,43 @@ fun CapitalScreen(vm: MainVm) {
     }
 
     editing?.let { acc ->
+        val isP = acc.type in PRICED_TYPES
         AlertDialog(
             onDismissRequest = { editing = null },
             title = { Text(acc.name) },
             text = {
-                OutlinedTextField(
-                    value = editText, onValueChange = { editText = it },
-                    label = { Text("موجودی جدید") }, singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (isP) {
+                        OutlinedTextField(
+                            value = editA, onValueChange = { editA = it },
+                            label = { Text(qtyLabel(acc.type)) }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                        )
+                        OutlinedTextField(
+                            value = editB, onValueChange = { editB = it },
+                            label = { Text(priceLabel(acc.type)) }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                        AmountHint(editB)
+                    } else {
+                        OutlinedTextField(
+                            value = editA, onValueChange = { editA = it },
+                            label = { Text("موجودی جدید") }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                        AmountHint(editA)
+                    }
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    editText.faToLong()?.let { vm.updateAccount(acc.copy(balance = it)) }
+                    if (isP) {
+                        val q = parseQty(editA)
+                        val p = editB.faToLong()
+                        if (q != null && p != null) vm.updateAccount(acc.copy(quantity = q, unitPrice = p))
+                    } else {
+                        editA.faToLong()?.let { vm.updateAccount(acc.copy(balance = it)) }
+                    }
                     editing = null
                 }) { Text("ذخیره") }
             },
