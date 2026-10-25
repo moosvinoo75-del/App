@@ -121,10 +121,30 @@ fun String.faToLong(): Long? {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // ذخیره‌ی خطا برای نمایش در اجرای بعدی
+        val f = java.io.File(filesDir, "crash.txt")
+        Thread.setDefaultUncaughtExceptionHandler { _, e ->
+            try {
+                f.writeText(android.util.Log.getStackTraceString(e))
+            } catch (_: Throwable) {
+            }
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }
+        val crash = if (f.exists()) f.readText().also { f.delete() } else null
+
         setContent {
             MaterialTheme {
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                    App()
+                if (crash != null) {
+                    Text(
+                        crash.take(1800),
+                        Modifier.statusBarsPadding().padding(16.dp),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else {
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                        App()
+                    }
                 }
             }
         }
