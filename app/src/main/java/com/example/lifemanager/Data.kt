@@ -46,6 +46,14 @@ data class Food(
     val date: Long
 )
 
+@Entity(tableName = "accounts")
+data class Account(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val type: String,
+    val balance: Long
+)
+
 @Dao
 interface TxnDao {
     @Query("SELECT * FROM transactions ORDER BY date DESC")
@@ -85,6 +93,20 @@ interface FoodDao {
     suspend fun clear()
 }
 
+@Dao
+interface AccountDao {
+    @Query("SELECT * FROM accounts ORDER BY id")
+    fun all(): Flow<List<Account>>
+    @Query("SELECT * FROM accounts")
+    suspend fun list(): List<Account>
+    @Insert suspend fun insert(a: Account)
+    @Insert suspend fun insertAll(l: List<Account>)
+    @Update suspend fun update(a: Account)
+    @Delete suspend fun delete(a: Account)
+    @Query("DELETE FROM accounts")
+    suspend fun clear()
+}
+
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL(
@@ -95,17 +117,31 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-@Database(entities = [Txn::class, TaskItem::class, Food::class], version = 2, exportSchema = false)
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `accounts` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`name` TEXT NOT NULL, `type` TEXT NOT NULL, `balance` INTEGER NOT NULL)"
+        )
+    }
+}
+
+@Database(
+    entities = [Txn::class, TaskItem::class, Food::class, Account::class],
+    version = 3,
+    exportSchema = false
+)
 abstract class AppDb : RoomDatabase() {
     abstract fun txnDao(): TxnDao
     abstract fun taskDao(): TaskDao
     abstract fun foodDao(): FoodDao
+    abstract fun accountDao(): AccountDao
 
     companion object {
         @Volatile private var inst: AppDb? = null
         fun get(ctx: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "life.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build().also { inst = it }
         }
     }
@@ -251,6 +287,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val txns = db.txnDao().all()
     val tasks = db.taskDao().all()
     val todayFoods = db.foodDao().since(startOfDay())
+    val accounts = db.accountDao().all()
 
     fun addTxn(amount: Long, income: Boolean, category: String, note: String) =
         viewModelScope.launch {
@@ -268,6 +305,11 @@ class MainVm(app: Application) : AndroidViewModel(app) {
 
     fun addFoods(list: List<Food>) = viewModelScope.launch { db.foodDao().insertAll(list) }
     fun delFood(f: Food) = viewModelScope.launch { db.foodDao().delete(f) }
+
+    fun addAccount(name: String, type: String, balance: Long) =
+        viewModelScope.launch { db.accountDao().insert(Account(name = name, type = type, balance = balance)) }
+    fun updateAccount(a: Account) = viewModelScope.launch { db.accountDao().update(a) }
+    fun delAccount(a: Account) = viewModelScope.launch { db.accountDao().delete(a) }
 
     suspend fun exportJson(): String {
         val o = JSONObject()
@@ -292,6 +334,11 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             )
         }
         o.put("foods", c)
+        val d = JSONArray()
+        db.accountDao().list().forEach {
+            d.put(JSONObject().put("name", it.name).put("type", it.type).put("balance", it.balance))
+        }
+        o.put("accounts", d)
         return o.toString(2)
     }
 
@@ -319,13 +366,20 @@ class MainVm(app: Application) : AndroidViewModel(app) {
                 kcal = j.getInt("kcal"), date = j.getLong("date")
             )
         }
+        val d = o.optJSONArray("accounts") ?: JSONArray()
+        val accounts = (0 until d.length()).map { i ->
+            val j = d.getJSONObject(i)
+            Account(name = j.getString("name"), type = j.getString("type"), balance = j.getLong("balance"))
+        }
         db.withTransaction {
             db.txnDao().clear()
             db.taskDao().clear()
             db.foodDao().clear()
+            db.accountDao().clear()
             db.txnDao().insertAll(txns)
             db.taskDao().insertAll(tasks)
             db.foodDao().insertAll(foods)
+            db.accountDao().insertAll(accounts)
         }
     }
 }
