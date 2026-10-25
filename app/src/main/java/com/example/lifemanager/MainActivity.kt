@@ -145,7 +145,9 @@ fun TxnScreen(vm: MainVm) {
     var dateErr by remember { mutableStateOf(false) }
     var pickedAcc by remember { mutableStateOf(0L) }
 
-    val accId = if (accounts.any { it.id == pickedAcc }) pickedAcc else (accounts.firstOrNull()?.id ?: 0L)
+    // فقط حساب‌های نقد/بانک/بدهی؛ طلا و ارز و سهام ارزششان مقدار × قیمت است
+    val usable = accounts.filter { it.type !in PRICED_TYPES }
+    val accId = if (usable.any { it.id == pickedAcc }) pickedAcc else (usable.firstOrNull()?.id ?: 0L)
     val accName = accounts.associate { it.id to it.name }
 
     val income = list.filter { it.isIncome }.sumOf { it.amount }
@@ -181,14 +183,15 @@ fun TxnScreen(vm: MainVm) {
                     Text("ثبت تراکنش", style = MaterialTheme.typography.titleMedium)
                     OutlinedTextField(
                         value = amount, onValueChange = { amount = it },
-                        label = { Text("مبلغ") }, singleLine = true,
+                        label = { Text("مبلغ (تومان)") }, singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth()
                     )
+                    AmountHint(amount)
 
-                    if (accounts.isEmpty()) {
+                    if (usable.isEmpty()) {
                         Text(
-                            "حسابی نداری؛ با ثبت اولین تراکنش، حساب «کیف پول» ساخته می‌شود.",
+                            "حساب نقد یا بانکی نداری؛ با ثبت اولین تراکنش، حساب «کیف پول» ساخته می‌شود.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -198,7 +201,7 @@ fun TxnScreen(vm: MainVm) {
                             Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            accounts.forEach { a ->
+                            usable.forEach { a ->
                                 FilterChip(
                                     selected = accId == a.id,
                                     onClick = { pickedAcc = a.id },
