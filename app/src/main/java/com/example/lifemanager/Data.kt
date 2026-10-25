@@ -52,7 +52,9 @@ data class Account(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val type: String,
-    val balance: Long
+    val balance: Long,
+    @ColumnInfo(defaultValue = "0") val quantity: Double = 0.0,
+    @ColumnInfo(defaultValue = "0") val unitPrice: Long = 0
 )
 
 @Dao
@@ -136,9 +138,16 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `accounts` ADD COLUMN `quantity` REAL NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `accounts` ADD COLUMN `unitPrice` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 @Database(
     entities = [Txn::class, TaskItem::class, Food::class, Account::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -151,7 +160,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var inst: AppDb? = null
         fun get(ctx: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "life.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build().also { inst = it }
         }
     }
@@ -300,14 +309,16 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val accounts = db.accountDao().all()
 
     // ثبت تراکنش + تغییر خودکار موجودی حساب (همه با هم، در یک تراکنش دیتابیس)
+    // فقط حساب‌های نقد/بانک/بدهی قابل انتخاب‌اند (نه طلا، ارز، سهام)
     fun addTxn(
         amount: Long, income: Boolean, category: String, note: String,
         date: Long, accountId: Long
     ) = viewModelScope.launch {
         db.withTransaction {
+            val usable = db.accountDao().list().filter { it.type !in PRICED_TYPES }
             val accId: Long =
-                if (accountId > 0 && db.accountDao().getById(accountId) != null) accountId
-                else db.accountDao().list().firstOrNull()?.id
+                if (accountId > 0 && usable.any { it.id == accountId }) accountId
+                else usable.firstOrNull()?.id
                     ?: db.accountDao().insertGetId(Account(name = "کیف پول", type = "نقد", balance = 0))
             val acc = db.accountDao().getById(accId)
             if (acc != null) {
@@ -349,8 +360,15 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     fun addFoods(list: List<Food>) = viewModelScope.launch { db.foodDao().insertAll(list) }
     fun delFood(f: Food) = viewModelScope.launch { db.foodDao().delete(f) }
 
-    fun addAccount(name: String, type: String, balance: Long) =
-        viewModelScope.launch { db.accountDao().insert(Account(name = name, type = type, balance = balance)) }
+    fun addAccount(name: String, type: String, balance: Long, quantity: Double, unitPrice: Long) =
+        viewModelScope.launch {
+            db.accountDao().insert(
+                Account(
+                    name = name, type = type, balance = balance,
+                    quantity = quantity, unitPrice = unitPrice
+                )
+            )
+        }
     fun updateAccount(a: Account) = viewModelScope.launch { db.accountDao().update(a) }
     fun delAccount(a: Account) = viewModelScope.launch { db.accountDao().delete(a) }
 
@@ -383,6 +401,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             d.put(
                 JSONObject().put("id", it.id).put("name", it.name)
                     .put("type", it.type).put("balance", it.balance)
+                    .put("quantity", it.quantity).put("unitPrice", it.unitPrice)
             )
         }
         o.put("accounts", d)
@@ -418,7 +437,8 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             val j = d.getJSONObject(i)
             Account(
                 id = j.optLong("id", 0), name = j.getString("name"),
-                type = j.getString("type"), balance = j.getLong("balance")
+                type = j.getString("type"), balance = j.getLong("balance"),
+                quantity = j.optDouble("quantity", 0.0), unitPrice = j.optLong("unitPrice", 0)
             )
         }
         db.withTransaction {
