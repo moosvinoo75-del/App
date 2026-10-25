@@ -27,7 +27,8 @@ data class Txn(
     val isIncome: Boolean,
     val category: String,
     val note: String,
-    val date: Long
+    val date: Long,
+    @ColumnInfo(defaultValue = "0") val accountId: Long = 0
 )
 
 @Entity(tableName = "tasks")
@@ -99,7 +100,10 @@ interface AccountDao {
     fun all(): Flow<List<Account>>
     @Query("SELECT * FROM accounts")
     suspend fun list(): List<Account>
+    @Query("SELECT * FROM accounts WHERE id = :id")
+    suspend fun getById(id: Long): Account?
     @Insert suspend fun insert(a: Account)
+    @Insert suspend fun insertGetId(a: Account): Long
     @Insert suspend fun insertAll(l: List<Account>)
     @Update suspend fun update(a: Account)
     @Delete suspend fun delete(a: Account)
@@ -126,9 +130,15 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `transactions` ADD COLUMN `accountId` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 @Database(
     entities = [Txn::class, TaskItem::class, Food::class, Account::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -141,7 +151,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var inst: AppDb? = null
         fun get(ctx: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "life.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build().also { inst = it }
         }
     }
@@ -289,15 +299,48 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val todayFoods = db.foodDao().since(startOfDay())
     val accounts = db.accountDao().all()
 
-    fun addTxn(amount: Long, income: Boolean, category: String, note: String) =
-        viewModelScope.launch {
+    // ثبت تراکنش + تغییر خودکار موجودی حساب (همه با هم، در یک تراکنش دیتابیس)
+    fun addTxn(
+        amount: Long, income: Boolean, category: String, note: String,
+        date: Long, accountId: Long
+    ) = viewModelScope.launch {
+        db.withTransaction {
+            val accId: Long =
+                if (accountId > 0 && db.accountDao().getById(accountId) != null) accountId
+                else db.accountDao().list().firstOrNull()?.id
+                    ?: db.accountDao().insertGetId(Account(name = "کیف پول", type = "نقد", balance = 0))
+            val acc = db.accountDao().getById(accId)
+            if (acc != null) {
+                val delta = if (income) amount else -amount
+                val signed = if (acc.type == "بدهی") -delta else delta
+                db.accountDao().update(acc.copy(balance = acc.balance + signed))
+            }
             db.txnDao().insert(
-                Txn(amount = amount, isIncome = income, category = category,
-                    note = note, date = System.currentTimeMillis())
+                Txn(
+                    amount = amount, isIncome = income, category = category,
+                    note = note, date = date, accountId = accId
+                )
             )
         }
+    }
+
+    // واردکردن گروهی (مثلاً پیامک): روی حساب‌ها اثر نمی‌گذارد
     fun addTxns(list: List<Txn>) = viewModelScope.launch { db.txnDao().insertAll(list) }
-    fun delTxn(t: Txn) = viewModelScope.launch { db.txnDao().delete(t) }
+
+    // حذف تراکنش + برگرداندن اثرش روی حساب
+    fun delTxn(t: Txn) = viewModelScope.launch {
+        db.withTransaction {
+            if (t.accountId > 0) {
+                val acc = db.accountDao().getById(t.accountId)
+                if (acc != null) {
+                    val delta = if (t.isIncome) -t.amount else t.amount
+                    val signed = if (acc.type == "بدهی") -delta else delta
+                    db.accountDao().update(acc.copy(balance = acc.balance + signed))
+                }
+            }
+            db.txnDao().delete(t)
+        }
+    }
 
     fun addTask(title: String) = viewModelScope.launch { db.taskDao().insert(TaskItem(title = title)) }
     fun toggle(t: TaskItem) = viewModelScope.launch { db.taskDao().update(t.copy(done = !t.done)) }
@@ -318,6 +361,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             a.put(
                 JSONObject().put("amount", it.amount).put("income", it.isIncome)
                     .put("category", it.category).put("note", it.note).put("date", it.date)
+                    .put("accountId", it.accountId)
             )
         }
         o.put("txns", a)
@@ -336,7 +380,10 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         o.put("foods", c)
         val d = JSONArray()
         db.accountDao().list().forEach {
-            d.put(JSONObject().put("name", it.name).put("type", it.type).put("balance", it.balance))
+            d.put(
+                JSONObject().put("id", it.id).put("name", it.name)
+                    .put("type", it.type).put("balance", it.balance)
+            )
         }
         o.put("accounts", d)
         return o.toString(2)
@@ -350,7 +397,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             Txn(
                 amount = j.getLong("amount"), isIncome = j.getBoolean("income"),
                 category = j.optString("category"), note = j.optString("note"),
-                date = j.getLong("date")
+                date = j.getLong("date"), accountId = j.optLong("accountId", 0)
             )
         }
         val b = o.optJSONArray("tasks") ?: JSONArray()
@@ -369,17 +416,20 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         val d = o.optJSONArray("accounts") ?: JSONArray()
         val accounts = (0 until d.length()).map { i ->
             val j = d.getJSONObject(i)
-            Account(name = j.getString("name"), type = j.getString("type"), balance = j.getLong("balance"))
+            Account(
+                id = j.optLong("id", 0), name = j.getString("name"),
+                type = j.getString("type"), balance = j.getLong("balance")
+            )
         }
         db.withTransaction {
             db.txnDao().clear()
             db.taskDao().clear()
             db.foodDao().clear()
             db.accountDao().clear()
+            db.accountDao().insertAll(accounts)
             db.txnDao().insertAll(txns)
             db.taskDao().insertAll(tasks)
             db.foodDao().insertAll(foods)
-            db.accountDao().insertAll(accounts)
         }
     }
 }
