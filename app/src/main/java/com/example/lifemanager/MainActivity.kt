@@ -1,9 +1,12 @@
 package com.example.lifemanager
 
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,8 +25,15 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
+    private val notifPerm =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -38,6 +48,19 @@ class MainActivity : ComponentActivity() {
             android.os.Process.killProcess(android.os.Process.myPid())
         }
         val crash = if (f.exists()) f.readText().also { f.delete() } else null
+
+        // اجازه‌ی اعلان (اندروید ۱۳ به بالا)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPerm.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        // بررسی سررسیدها و ثبت تراکنش‌های تکراری، هر ۱۲ ساعت در پس‌زمینه
+        val req = PeriodicWorkRequestBuilder<ReminderWorker>(12, TimeUnit.HOURS).build()
+        WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+            "due-reminders", ExistingPeriodicWorkPolicy.KEEP, req
+        )
 
         setContent {
             AppTheme {
@@ -84,7 +107,7 @@ fun App(vm: MainVm = viewModel()) {
     ) { pad ->
         Box(Modifier.padding(pad).consumeWindowInsets(pad).imePadding()) {
             when (tab) {
-                0 -> FinanceHost(vm)
+                0 -> FinanceRoot(vm)
                 1 -> TaskScreen(vm)
                 2 -> FoodScreen(vm)
                 3 -> AssistantScreen(vm)
