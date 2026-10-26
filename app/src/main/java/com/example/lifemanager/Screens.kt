@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -62,9 +64,8 @@ fun FoodScreen(vm: MainVm) {
                     msg = ""
                     scope.launch {
                         try {
-                            val key = Prefs.apiKey(ctx)
-                            if (key.isNotBlank()) {
-                                val out = Ai.ask(key, Ai.MODEL_FAST, Ai.FOOD_PROMPT, text)
+                            if (AiHub.isReady(ctx)) {
+                                val out = AiHub.ask(ctx, AiHub.FOOD_PROMPT, text)
                                 val arr = JSONArray(out.substring(out.indexOf('['), out.lastIndexOf(']') + 1))
                                 val now = System.currentTimeMillis()
                                 val foods = (0 until arr.length()).map { i ->
@@ -121,6 +122,7 @@ fun AssistantScreen(vm: MainVm) {
     val txns by vm.txns.collectAsState(initial = emptyList())
     val tasks by vm.tasks.collectAsState(initial = emptyList())
     val foods by vm.todayFoods.collectAsState(initial = emptyList())
+    var prov by remember { mutableStateOf(AiHub.provider(ctx)) }
     var q by remember { mutableStateOf("") }
     var answer by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -129,15 +131,24 @@ fun AssistantScreen(vm: MainVm) {
         Modifier.fillMaxSize().statusBarsPadding().padding(16.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        Text("پاسخ‌دهنده", style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AiHub.PROVIDERS.forEach { p ->
+                FilterChip(
+                    selected = prov == p,
+                    onClick = { prov = p; AiHub.setProvider(ctx, p) },
+                    label = { Text(AiHub.label(p)) }
+                )
+            }
+        }
         OutlinedTextField(
             value = q, onValueChange = { q = it },
             label = { Text("سؤالت را بنویس") },
             minLines = 2, modifier = Modifier.fillMaxWidth()
         )
         Button(enabled = !busy, onClick = {
-            val key = Prefs.apiKey(ctx)
-            if (key.isBlank()) {
-                answer = "اول کلید API را در تب «بیشتر» وارد کن."
+            if (AiHub.key(ctx, prov).isBlank()) {
+                answer = "اول کلید API ${AiHub.label(prov)} را در تب «بیشتر» وارد کن."
             } else if (q.isNotBlank()) {
                 busy = true
                 scope.launch {
@@ -153,7 +164,7 @@ fun AssistantScreen(vm: MainVm) {
                             append("\nکالری امروز: ${foods.sumOf { it.kcal }}\n")
                         }
                         val system = "تو دستیار شخصی فارسی‌زبان هستی. فقط بر اساس داده‌های زیر جواب بده، کوتاه و دقیق.\n\n$data"
-                        answer = Ai.ask(key, Ai.MODEL_SMART, system, q)
+                        answer = AiHub.ask(ctx, system, q)
                     } catch (e: Exception) {
                         answer = "خطا: ${e.message}"
                     }
@@ -221,10 +232,20 @@ fun readSms(ctx: Context, days: Int, rial: Boolean): List<ParsedSms> {
 fun MoreScreen(vm: MainVm) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var key by remember { mutableStateOf(Prefs.apiKey(ctx)) }
+    var prov by remember { mutableStateOf(AiHub.provider(ctx)) }
+    var keyText by remember { mutableStateOf(AiHub.key(ctx, AiHub.provider(ctx))) }
+    var modelText by remember { mutableStateOf(AiHub.model(ctx, AiHub.provider(ctx))) }
+    var models by remember { mutableStateOf<List<String>>(emptyList()) }
+    var showModels by remember { mutableStateOf(false) }
+    var aiBusy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf("") }
     var found by remember { mutableStateOf<List<ParsedSms>>(emptyList()) }
     var rial by remember { mutableStateOf(true) }
+
+    fun saveAi() {
+        AiHub.setKey(ctx, prov, keyText)
+        AiHub.setModel(ctx, prov, modelText)
+    }
 
     fun loadSms() {
         scope.launch {
@@ -284,16 +305,64 @@ fun MoreScreen(vm: MainVm) {
         }
 
         Text("هوش مصنوعی (اختیاری)", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "کلید API از console.anthropic.com. بدون کلید، تغذیه با جدول داخلی کار می‌کند و دستیار غیرفعال است.",
-            style = MaterialTheme.typography.bodySmall
-        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AiHub.PROVIDERS.forEach { p ->
+                FilterChip(
+                    selected = prov == p,
+                    onClick = {
+                        prov = p
+                        AiHub.setProvider(ctx, p)
+                        keyText = AiHub.key(ctx, p)
+                        modelText = AiHub.model(ctx, p)
+                    },
+                    label = { Text(AiHub.label(p)) }
+                )
+            }
+        }
+        Text(AiHub.keyHint(prov), style = MaterialTheme.typography.bodySmall)
         OutlinedTextField(
-            value = key, onValueChange = { key = it },
-            label = { Text("کلید API") }, singleLine = true,
+            value = keyText, onValueChange = { keyText = it },
+            label = { Text("کلید API ${AiHub.label(prov)}") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth()
         )
-        Button(onClick = { Prefs.setApiKey(ctx, key); msg = "کلید ذخیره شد" }) { Text("ذخیره کلید") }
+        OutlinedTextField(
+            value = modelText, onValueChange = { modelText = it },
+            label = { Text("نام مدل") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(onClick = { saveAi(); msg = "ذخیره شد" }) { Text("ذخیره") }
+            OutlinedButton(enabled = !aiBusy, onClick = {
+                saveAi()
+                aiBusy = true
+                scope.launch {
+                    try {
+                        models = AiHub.listModels(ctx)
+                        if (models.isEmpty()) msg = "مدلی پیدا نشد" else showModels = true
+                    } catch (e: Exception) {
+                        msg = "خطا: ${e.message}"
+                    }
+                    aiBusy = false
+                }
+            }) { Text("فهرست مدل‌ها") }
+            OutlinedButton(enabled = !aiBusy, onClick = {
+                saveAi()
+                aiBusy = true
+                scope.launch {
+                    try {
+                        val r = AiHub.ask(ctx, "در یک جمله‌ی کوتاه فارسی جواب بده.", "سلام، کار می‌کنی؟")
+                        msg = "✓ ${AiHub.label(prov)}: ${r.take(120)}"
+                    } catch (e: Exception) {
+                        msg = "خطا: ${e.message}"
+                    }
+                    aiBusy = false
+                }
+            }) { Text(if (aiBusy) "صبر کن..." else "تست") }
+        }
 
         HorizontalDivider()
         Text("پیامک بانکی", style = MaterialTheme.typography.titleMedium)
@@ -327,5 +396,25 @@ fun MoreScreen(vm: MainVm) {
         Text("بکاپ", style = MaterialTheme.typography.titleMedium)
         Button(onClick = { exportLauncher.launch("lifemanager-backup.json") }) { Text("گرفتن بکاپ") }
         Button(onClick = { importLauncher.launch(arrayOf("*/*")) }) { Text("بازیابی (جایگزین همه‌ی داده‌ها)") }
+    }
+
+    if (showModels) {
+        AlertDialog(
+            onDismissRequest = { showModels = false },
+            title = { Text("مدل‌های موجود ${AiHub.label(prov)}") },
+            text = {
+                LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                    items(models) { m ->
+                        TextButton(onClick = {
+                            modelText = m
+                            AiHub.setModel(ctx, prov, m)
+                            showModels = false
+                            msg = "مدل انتخاب شد: $m"
+                        }) { Text(m) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showModels = false }) { Text("بستن") } }
+        )
     }
 }
