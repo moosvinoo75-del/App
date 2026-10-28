@@ -19,9 +19,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -37,6 +39,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        UiPrefs.load(this)
 
         // ذخیره‌ی خطا برای نمایش در اجرای بعدی
         val f = java.io.File(filesDir, "crash.txt")
@@ -63,18 +66,23 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            AppTheme {
-                if (crash != null) {
-                    Surface(Modifier.fillMaxSize()) {
-                        Text(
-                            crash.take(1800),
-                            Modifier.statusBarsPadding().padding(16.dp),
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                } else {
-                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                        App()
+            val dens = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(dens.density, dens.fontScale * UiPrefs.fontScale)
+            ) {
+                AppTheme {
+                    if (crash != null) {
+                        Surface(Modifier.fillMaxSize()) {
+                            Text(
+                                crash.take(1800),
+                                Modifier.statusBarsPadding().padding(16.dp),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    } else {
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                            App()
+                        }
                     }
                 }
             }
@@ -107,7 +115,7 @@ fun App(vm: MainVm = viewModel()) {
     ) { pad ->
         Box(Modifier.padding(pad).consumeWindowInsets(pad).imePadding()) {
             when (tab) {
-                0 -> FinanceRoot(vm)
+                0 -> FinanceHub(vm)
                 1 -> TaskScreen(vm)
                 2 -> FoodScreen(vm)
                 3 -> AssistantScreen(vm)
