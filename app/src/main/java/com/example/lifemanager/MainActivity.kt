@@ -9,8 +9,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,7 +20,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -116,7 +113,7 @@ fun App(vm: MainVm = viewModel()) {
         Box(Modifier.padding(pad).consumeWindowInsets(pad).imePadding()) {
             when (tab) {
                 0 -> FinanceHub(vm)
-                1 -> TaskScreen(vm)
+                1 -> TasksScreen(vm)
                 2 -> FoodScreen(vm)
                 3 -> AssistantScreen(vm)
                 else -> MoreScreen(vm)
@@ -150,69 +147,6 @@ fun HeroCard(
                 Column(horizontalAlignment = Alignment.End) {
                     Text(rightLabel, color = soft, style = MaterialTheme.typography.bodySmall)
                     Text(rightValue, color = Color.White, fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
-    }
-}
-
-// ---------- کارها ----------
-
-@Composable
-fun TaskScreen(vm: MainVm) {
-    val list by vm.tasks.collectAsState(initial = emptyList())
-    var title by remember { mutableStateOf("") }
-    val doneCount = list.count { it.done }
-    val frac = if (list.isEmpty()) 0f else doneCount.toFloat() / list.size
-
-    Column(Modifier.fillMaxSize().statusBarsPadding().padding(16.dp)) {
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                Text("کارها", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    "$doneCount از ${list.size} انجام شد",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(10.dp))
-                LinearProgressIndicator(
-                    progress = { frac },
-                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp))
-                )
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = title, onValueChange = { title = it },
-                label = { Text("کار جدید") }, singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = {
-                if (title.isNotBlank()) { vm.addTask(title.trim()); title = "" }
-            }) { Text("افزودن") }
-        }
-        Spacer(Modifier.height(8.dp))
-        if (list.isEmpty()) {
-            Text("فعلاً کاری نداری 🎉", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(list, key = { it.id }) { t ->
-                Card(Modifier.fillMaxWidth()) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(checked = t.done, onCheckedChange = { vm.toggle(t) })
-                        Text(
-                            t.title, Modifier.weight(1f),
-                            textDecoration = if (t.done) TextDecoration.LineThrough else null,
-                            color = if (t.done) MaterialTheme.colorScheme.onSurfaceVariant
-                            else MaterialTheme.colorScheme.onSurface
-                        )
-                        TextButton(onClick = { vm.delTask(t) }) { Text("✕") }
-                    }
                 }
             }
         }
