@@ -25,6 +25,7 @@ data class Txn(
     @ColumnInfo(defaultValue = "0") val accountId: Long = 0
 )
 
+// جدول قدیمی کارها (فقط برای سازگاری؛ کارهای جدید در جدول todos ذخیره می‌شوند)
 @Entity(tableName = "tasks")
 data class TaskItem(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -245,13 +246,32 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
+// جدول جدید کارها + انتقال کارهای قدیمی
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `todos` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`title` TEXT NOT NULL, `note` TEXT NOT NULL, `done` INTEGER NOT NULL, " +
+                "`dueDate` INTEGER NOT NULL, `hasTime` INTEGER NOT NULL, `priority` INTEGER NOT NULL, " +
+                "`category` TEXT NOT NULL, `repeatMode` INTEGER NOT NULL, `remind` INTEGER NOT NULL, " +
+                "`subs` TEXT NOT NULL, `doneAt` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "INSERT INTO `todos` (`title`, `note`, `done`, `dueDate`, `hasTime`, `priority`, " +
+                "`category`, `repeatMode`, `remind`, `subs`, `doneAt`) " +
+                "SELECT `title`, '', `done`, 0, 0, 0, '', 0, 0, '', 0 FROM `tasks`"
+        )
+    }
+}
+
 @Database(
     entities = [
         Txn::class, TaskItem::class, Food::class, Account::class,
         Budget::class, Goal::class, Snapshot::class,
-        Cheque::class, Loan::class, PersonDebt::class, Recurring::class, Transfer::class
+        Cheque::class, Loan::class, PersonDebt::class, Recurring::class, Transfer::class,
+        Todo::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -267,6 +287,7 @@ abstract class AppDb : RoomDatabase() {
     abstract fun personDebtDao(): PersonDebtDao
     abstract fun recurringDao(): RecurringDao
     abstract fun transferDao(): TransferDao
+    abstract fun todoDao(): TodoDao
 
     companion object {
         @Volatile private var inst: AppDb? = null
@@ -274,7 +295,7 @@ abstract class AppDb : RoomDatabase() {
             inst ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "life.db")
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
-                    MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7
+                    MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
                 )
                 .build().also { inst = it }
         }
@@ -343,10 +364,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             db.txnDao().delete(t)
         }
     }
-
-    fun addTask(title: String) = viewModelScope.launch { db.taskDao().insert(TaskItem(title = title)) }
-    fun toggle(t: TaskItem) = viewModelScope.launch { db.taskDao().update(t.copy(done = !t.done)) }
-    fun delTask(t: TaskItem) = viewModelScope.launch { db.taskDao().delete(t) }
 
     fun addFoods(list: List<Food>) = viewModelScope.launch { db.foodDao().insertAll(list) }
     fun delFood(f: Food) = viewModelScope.launch { db.foodDao().delete(f) }
@@ -425,7 +442,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             )
         }
         o.put("goals", g)
-        db.putExtraJson(o)
+        db.putAllExtra(o)
         return o.toString(2)
     }
 
@@ -485,7 +502,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             db.foodDao().insertAll(foods)
             db.budgetDao().insertAll(budgets)
             db.goalDao().insertAll(goals)
-            db.restoreExtra(o)
+            db.restoreAll(o)
         }
     }
 }
