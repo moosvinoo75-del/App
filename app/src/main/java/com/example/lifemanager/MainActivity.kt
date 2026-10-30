@@ -41,7 +41,6 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         UiPrefs.load(this)
 
-        // ذخیره‌ی خطا برای نمایش در اجرای بعدی
         val f = java.io.File(filesDir, "crash.txt")
         Thread.setDefaultUncaughtExceptionHandler { _, e ->
             try {
@@ -52,14 +51,12 @@ class MainActivity : ComponentActivity() {
         }
         val crash = if (f.exists()) f.readText().also { f.delete() } else null
 
-        // اجازه‌ی اعلان (اندروید ۱۳ به بالا)
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             notifPerm.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        // بررسی سررسیدها و ثبت تراکنش‌های تکراری، هر ۱۲ ساعت در پس‌زمینه
         val req = PeriodicWorkRequestBuilder<ReminderWorker>(12, TimeUnit.HOURS).build()
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
             "due-reminders", ExistingPeriodicWorkPolicy.KEEP, req
@@ -125,8 +122,6 @@ fun App(vm: MainVm = viewModel()) {
     }
 }
 
-// ---------- کارت بزرگ بالای صفحه ----------
-
 @Composable
 fun HeroCard(
     title: String, value: Long,
@@ -155,8 +150,6 @@ fun HeroCard(
         }
     }
 }
-
-// ---------- کارها ----------
 
 @Composable
 fun TaskScreen(vm: MainVm) {
