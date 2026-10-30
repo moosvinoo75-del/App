@@ -80,33 +80,6 @@ val CHART_COLORS = listOf(
     Color(0xFF7C3AED), Color(0xFF16A34A), Color(0xFFEA580C), Color(0xFF64748B)
 )
 
-// ---------- صفحه‌ی اصلی بخش مالی ----------
-
-@Composable
-fun FinanceHost(vm: MainVm) {
-    var sub by remember { mutableIntStateOf(0) }
-    var ym by remember { mutableStateOf(currentYM()) }
-    val subs = listOf("نمای کلی", "تراکنش‌ها", "حساب‌ها", "بودجه", "اهداف")
-    Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.statusBarsPadding().horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            subs.forEachIndexed { i, s ->
-                FilterChip(selected = sub == i, onClick = { sub = i }, label = { Text(s) })
-            }
-        }
-        when (sub) {
-            0 -> OverviewScreen(vm, ym) { ym = it }
-            1 -> TxnScreen(vm, ym) { ym = it }
-            2 -> AccountsScreen(vm)
-            3 -> BudgetScreen(vm, ym) { ym = it }
-            else -> GoalsScreen(vm)
-        }
-    }
-}
-
 @Composable
 fun MonthNav(ym: YM, onYm: (YM) -> Unit) {
     Row(
@@ -176,7 +149,6 @@ fun LineChart(points: List<Long>, color: Color, modifier: Modifier = Modifier) {
             var lastX = 0f
             var lastY = 0f
             points.forEachIndexed { i, v ->
-                // قدیمی‌ترین نقطه سمت راست (مثل جهت فارسی)
                 val x = size.width * (1f - i / (points.size - 1).toFloat())
                 val y = size.height - pad - (v - minV).toFloat() / range * (size.height - 2 * pad)
                 if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
@@ -235,6 +207,17 @@ fun OverviewScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
     val saving = income - expense
     val rate = if (income > 0) (saving * 100 / income).toInt() else 0
 
+    // آمارهای هوشمند ماهانه
+    val expenseTxns = month.filter { !it.isIncome }
+    val daysPassed = if (ym == currentYM()) {
+        val j = jalaliOf(System.currentTimeMillis())
+        maxOf(1, j[2])
+    } else {
+        30
+    }
+    val dailyAvgExpense = if (expenseTxns.isNotEmpty()) expense / daysPassed else 0L
+    val predictedTotalExpense = dailyAvgExpense * 30
+
     val cats = categoryTotals(month)
     val top = cats.take(6)
     val rest = cats.drop(6).sumOf { it.second }
@@ -273,6 +256,11 @@ fun OverviewScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
                 if (saving >= 0) IncomeColor else ExpenseColor, Modifier.weight(1f)
             )
         }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatCard("میانگین خرج روزانه", shortAmount(dailyAvgExpense), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+            StatCard("پیش‌بینی کل هزینه ماه", shortAmount(predictedTotalExpense), MaterialTheme.colorScheme.onSurfaceVariant, Modifier.weight(1f))
+        }
+
         if (income > 0) {
             Text(
                 "نرخ پس‌انداز این ماه: ${rate}٪ از درآمد",
@@ -501,11 +489,16 @@ fun BudgetScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
 @Composable
 fun GoalsScreen(vm: MainVm) {
     val goals by vm.goals.collectAsState(initial = emptyList())
+    val accounts by vm.accounts.collectAsState(initial = emptyList())
+    val usable = accounts.filter { it.type !in PRICED_TYPES }
+
     var name by remember { mutableStateOf("") }
     var target by remember { mutableStateOf("") }
     var saved by remember { mutableStateOf("") }
+
     var contrib by remember { mutableStateOf<Goal?>(null) }
     var contribText by remember { mutableStateOf("") }
+    var contribAcc by remember { mutableStateOf(0L) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
@@ -546,7 +539,7 @@ fun GoalsScreen(vm: MainVm) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    OutlinedButton(onClick = { contrib = g; contribText = "" }) {
+                    OutlinedButton(onClick = { contrib = g; contribText = ""; contribAcc = 0L }) {
                         Text("افزودن یا برداشت پس‌انداز")
                     }
                 }
@@ -590,6 +583,7 @@ fun GoalsScreen(vm: MainVm) {
     }
 
     contrib?.let { g ->
+        val chosenAcc = if (usable.any { it.id == contribAcc }) contribAcc else (usable.firstOrNull()?.id ?: 0L)
         AlertDialog(
             onDismissRequest = { contrib = null },
             title = { Text(g.name) },
@@ -598,24 +592,29 @@ fun GoalsScreen(vm: MainVm) {
                     OutlinedTextField(
                         value = contribText, onValueChange = { contribText = it },
                         label = { Text("مبلغ (تومان)") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
                     )
                     AmountHint(contribText)
+                    if (usable.isNotEmpty()) {
+                        Text("حساب بانکی / نقدی (برای کسر یا واریز وجه)", style = MaterialTheme.typography.bodySmall)
+                        AccountChips(usable, chosenAcc) { contribAcc = it }
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     val v = contribText.faToLong()
-                    if (v != null && v > 0) vm.addToGoal(g, v)
+                    if (v != null && v > 0) vm.addToGoal(g, v, chosenAcc)
                     contrib = null
-                }) { Text("افزودن") }
+                }) { Text("افزودن پس‌انداز") }
             },
             dismissButton = {
                 TextButton(onClick = {
                     val v = contribText.faToLong()
-                    if (v != null && v > 0) vm.addToGoal(g, -v)
+                    if (v != null && v > 0) vm.addToGoal(g, -v, chosenAcc)
                     contrib = null
-                }) { Text("برداشت") }
+                }) { Text("برداشت از پس‌انداز") }
             }
         )
     }
