@@ -242,6 +242,27 @@ fun MainVm.deleteTodo(t: Todo) = viewModelScope.launch {
 
 fun MainVm.clearDoneTodos() = viewModelScope.launch { db.todoDao().clearDone() }
 
+// ---------- توابع سازگاری جهت رفع خطای کامپایل MainActivity ----------
+fun MainVm.addTask(title: String) = saveTodo(Todo(title = title))
+fun MainVm.addTask(title: String, note: String) = saveTodo(Todo(title = title, note = note))
+fun MainVm.addTask(item: TaskItem) = saveTodo(Todo(title = item.title, done = item.done))
+
+fun MainVm.toggle(t: Todo) = toggleTodo(t)
+fun MainVm.toggle(item: TaskItem) = viewModelScope.launch {
+    val existing = db.todoDao().list().firstOrNull { it.title == item.title }
+    if (existing != null) {
+        toggleTodo(existing)
+    } else {
+        saveTodo(Todo(title = item.title, done = !item.done))
+    }
+}
+
+fun MainVm.delTask(t: Todo) = deleteTodo(t)
+fun MainVm.delTask(item: TaskItem) = viewModelScope.launch {
+    val existing = db.todoDao().list().firstOrNull { it.title == item.title }
+    if (existing != null) deleteTodo(existing)
+}
+
 suspend fun AppDb.putAllExtra(o: JSONObject) {
     putExtraJson(o)
     putTodosJson(o)
