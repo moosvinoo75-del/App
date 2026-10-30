@@ -320,7 +320,6 @@ fun MainVm.addPerson(person: String, amount: Long, owedToMe: Boolean, note: Stri
         )
     }
 
-// تسویه/پرداخت طلب یا بدهی شخص همراه با ثبت تراکنش و اثر روی حساب
 fun MainVm.payPerson(p: PersonDebt, delta: Long, accountId: Long) = viewModelScope.launch {
     db.withTransaction {
         if (delta > 0L) {
@@ -354,7 +353,6 @@ fun MainVm.addRecurring(
     )
 }
 
-// ثبت دستی تراکنش تکراری (برای مواردی که ثبت خودکار خاموش است)
 fun MainVm.payRecurringManual(r: Recurring, accountId: Long) = viewModelScope.launch {
     db.withTransaction {
         db.postTxn(
@@ -374,7 +372,6 @@ fun MainVm.setRecurringActive(r: Recurring, active: Boolean) = viewModelScope.la
 
 fun MainVm.delRecurring(r: Recurring) = viewModelScope.launch { db.recurringDao().delete(r) }
 
-// انتقال پول بین دو حساب (درآمد/هزینه حساب نمی‌شود)
 fun MainVm.transfer(fromId: Long, toId: Long, amount: Long, note: String, date: Long) =
     viewModelScope.launch {
         if (fromId != toId && amount > 0) {
@@ -441,7 +438,6 @@ fun showDueNotification(ctx: Context, lines: List<String>) {
     nm.notify(1001, n)
 }
 
-// هر ۱۲ ساعت اجرا می‌شود؛ تراکنش‌های تکراری را ثبت و حداکثر روزی یک بار اعلان می‌دهد
 class ReminderWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         try {
@@ -477,9 +473,9 @@ fun buildCsv(txns: List<Txn>, accName: Map<Long, String>): String {
     return sb.toString()
 }
 
-// ---------- بکاپ بخش‌های جدید ----------
+// ---------- بکاپ و بازیابی بخش‌های جدید (متدهای هماهنگ با AppDb) ----------
 
-suspend fun AppDb.putExtraJson(o: JSONObject) {
+suspend fun AppDb.putAllExtra(o: JSONObject) {
     val a = JSONArray()
     chequeDao().list().forEach {
         a.put(
@@ -524,7 +520,7 @@ suspend fun AppDb.putExtraJson(o: JSONObject) {
     o.put("transfers", e)
 }
 
-suspend fun AppDb.restoreExtra(o: JSONObject) {
+suspend fun AppDb.restoreAllExtra(o: JSONObject) {
     fun arr(name: String): JSONArray = o.optJSONArray(name) ?: JSONArray()
 
     val a = arr("cheques")
