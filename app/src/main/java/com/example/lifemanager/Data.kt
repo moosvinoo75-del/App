@@ -512,7 +512,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         }
         val e = o.optJSONArray("budgets") ?: JSONArray()
         val budgets = (0 until e.length()).map { i ->
-            val j = e.getJSONObject(i)
+            val j = o.optJSONArray("budgets")?.getJSONObject(i) ?: e.getJSONObject(i)
             Budget(category = j.getString("category"), limitAmount = j.getLong("limit"))
         }
         val g = o.optJSONArray("goals") ?: JSONArray()
@@ -533,7 +533,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             db.foodDao().insertAll(foods)
             db.budgetDao().insertAll(budgets)
             db.goalDao().insertAll(goals)
-            db.restoreAllExtra(o)
+            db.restoreAll(o)
         }
     }
 }
