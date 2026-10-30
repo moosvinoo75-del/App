@@ -60,4 +60,187 @@ fun AccountsScreen(vm: MainVm) {
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
-        verticalArr
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        HeroCard(
+            "ثروت خالص", w.net,
+            "دارایی‌ها", fmt(w.assets),
+            "بدهی‌ها", fmt(w.debts)
+        )
+        Text(
+            "ثروت خالص = ارزش همه‌ی دارایی‌ها − بدهی‌ها",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        AmountWords(w.net)
+
+        if (accounts.isEmpty()) {
+            Text("هنوز حسابی اضافه نکرده‌ای.", style = MaterialTheme.typography.bodySmall)
+        }
+        accounts.forEach { a ->
+            Card(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.padding(12.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(a.name)
+                        Text(
+                            if (a.isPriced())
+                                "${a.type} · ${qtyText(a.quantity)} ${unitName(a.type)} × ${fmt(a.unitPrice)}"
+                            else a.type,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        fmt(a.value()),
+                        color = if (a.type == "بدهی") Color(0xFFC62828) else Color.Unspecified
+                    )
+                    TextButton(onClick = {
+                        editing = a
+                        editName = a.name
+                        if (a.type in PRICED_TYPES) {
+                            editA = if (a.quantity > 0) qtyText(a.quantity) else ""
+                            editB = if (a.unitPrice > 0) a.unitPrice.toString() else ""
+                        } else {
+                            editA = a.balance.toString()
+                            editB = ""
+                        }
+                    }) { Text("ویرایش") }
+                    TextButton(onClick = { vm.delAccount(a) }) { Text("✕") }
+                }
+            }
+        }
+
+        Text("حساب جدید", style = MaterialTheme.typography.titleMedium)
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ACCOUNT_TYPES.forEach { t ->
+                FilterChip(selected = type == t, onClick = { type = t }, label = { Text(t) })
+            }
+        }
+        OutlinedTextField(
+            value = name, onValueChange = { name = it },
+            label = { Text("نام (مثلاً کیف پول، سکه‌های خانه)") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (priced) {
+            OutlinedTextField(
+                value = qty, onValueChange = { qty = it },
+                label = { Text(qtyLabel(type)) }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = price, onValueChange = { price = it },
+                label = { Text(priceLabel(type)) }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
+            AmountHint(price)
+            if (newQty != null && newPrice != null) {
+                val v = Math.round(newQty * newPrice)
+                Text("ارزش کل: ${fmt(v)} تومان", fontWeight = FontWeight.SemiBold)
+                AmountWords(v)
+            }
+        } else {
+            OutlinedTextField(
+                value = balance, onValueChange = { balance = it },
+                label = { Text(if (type == "بدهی") "مبلغ بدهی" else "موجودی") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
+            AmountHint(balance)
+        }
+        Button(onClick = {
+            if (name.isNotBlank()) {
+                if (priced) {
+                    if (newQty != null && newPrice != null) {
+                        vm.addAccount(name.trim(), type, 0L, newQty, newPrice)
+                        name = ""; qty = ""; price = ""
+                    }
+                } else {
+                    val b = balance.faToLong()
+                    if (b != null) {
+                        vm.addAccount(name.trim(), type, b, 0.0, 0L)
+                        name = ""; balance = ""
+                    }
+                }
+            }
+        }) { Text("افزودن حساب") }
+
+        HorizontalDivider()
+        Text("دارایی‌ها بر اساس نوع", style = MaterialTheme.typography.titleMedium)
+        if (w.byType.isEmpty()) {
+            Text("—")
+        } else {
+            val maxType = w.byType.first().second
+            w.byType.forEach { BarRow(it.first, it.second, maxType, MaterialTheme.colorScheme.primary) }
+        }
+        Spacer(Modifier.height(16.dp))
+    }
+
+    editing?.let { acc ->
+        val isP = acc.type in PRICED_TYPES
+        AlertDialog(
+            onDismissRequest = { editing = null },
+            title = { Text("ویرایش حساب") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = editName, onValueChange = { editName = it },
+                        label = { Text("نام حساب") }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (isP) {
+                        OutlinedTextField(
+                            value = editA, onValueChange = { editA = it },
+                            label = { Text(qtyLabel(acc.type)) }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = editB, onValueChange = { editB = it },
+                            label = { Text(priceLabel(acc.type)) }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        AmountHint(editB)
+                    } else {
+                        OutlinedTextField(
+                            value = editA, onValueChange = { editA = it },
+                            label = { Text("موجودی جدید") }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        AmountHint(editA)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (editName.isNotBlank()) {
+                        if (isP) {
+                            val q = parseQty(editA)
+                            val p = editB.faToLong()
+                            if (q != null && p != null) {
+                                vm.updateAccount(acc.copy(name = editName.trim(), quantity = q, unitPrice = p))
+                                editing = null
+                            }
+                        } else {
+                            editA.faToLong()?.let {
+                                vm.updateAccount(acc.copy(name = editName.trim(), balance = it))
+                                editing = null
+                            }
+                        }
+                    }
+                }) { Text("ذخیره") }
+            },
+            dismissButton = { TextButton(onClick = { editing = null }) { Text("انصراف") } }
+        )
+    }
+}
