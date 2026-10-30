@@ -337,6 +337,20 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------- کارها (جدول قدیمی tasks) ----------
+
+    fun addTask(title: String) = viewModelScope.launch {
+        db.taskDao().insert(TaskItem(title = title))
+    }
+
+    fun toggle(t: TaskItem) = viewModelScope.launch {
+        db.taskDao().update(t.copy(done = !t.done))
+    }
+
+    fun delTask(t: TaskItem) = viewModelScope.launch {
+        db.taskDao().delete(t)
+    }
+
     // ثبت تراکنش + تغییر خودکار موجودی حساب
     fun addTxn(
         amount: Long, income: Boolean, category: String, note: String,
@@ -490,7 +504,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     suspend fun importJson(s: String) {
         val o = JSONObject(s)
         val a = o.optJSONArray("txns") ?: JSONArray()
-        val txns = (0 until a.length()).map { i ->
+        val txns: List<Txn> = (0 until a.length()).map { i ->
             val j = a.getJSONObject(i)
             Txn(
                 amount = j.getLong("amount"), isIncome = j.getBoolean("income"),
@@ -499,12 +513,12 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             )
         }
         val b = o.optJSONArray("tasks") ?: JSONArray()
-        val tasks = (0 until b.length()).map { i ->
+        val tasks: List<TaskItem> = (0 until b.length()).map { i ->
             val j = b.getJSONObject(i)
             TaskItem(title = j.getString("title"), done = j.optBoolean("done"))
         }
         val c = o.optJSONArray("foods") ?: JSONArray()
-        val foods = (0 until c.length()).map { i ->
+        val foods: List<Food> = (0 until c.length()).map { i ->
             val j = c.getJSONObject(i)
             Food(
                 name = j.getString("name"), grams = j.optInt("grams"),
@@ -512,7 +526,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             )
         }
         val d = o.optJSONArray("accounts") ?: JSONArray()
-        val accounts = (0 until d.length()).map { i ->
+        val accounts: List<Account> = (0 until d.length()).map { i ->
             val j = d.getJSONObject(i)
             Account(
                 id = j.optLong("id", 0), name = j.getString("name"),
@@ -521,12 +535,12 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             )
         }
         val e = o.optJSONArray("budgets") ?: JSONArray()
-        val budgets = (0 until e.length()).map { i ->
+        val budgets: List<Budget> = (0 until e.length()).map { i ->
             val j = e.getJSONObject(i)
             Budget(category = j.getString("category"), limitAmount = j.getLong("limit"))
         }
         val g = o.optJSONArray("goals") ?: JSONArray()
-        val goals = (0 until g.length()).map { i ->
+        val goals: List<Goal> = (0 until g.length()).map { i ->
             val j = g.getJSONObject(i)
             Goal(name = j.getString("name"), target = j.getLong("target"), saved = j.getLong("saved"))
         }
