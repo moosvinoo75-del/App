@@ -12,8 +12,6 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
-// ---------- جدول‌ها ----------
-
 @Entity(tableName = "transactions")
 data class Txn(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -25,7 +23,6 @@ data class Txn(
     @ColumnInfo(defaultValue = "0") val accountId: Long = 0
 )
 
-// جدول قدیمی کارها (فقط برای سازگاری؛ کارهای جدید در جدول todos ذخیره می‌شوند)
 @Entity(tableName = "tasks")
 data class TaskItem(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -301,8 +298,6 @@ abstract class AppDb : RoomDatabase() {
     }
 }
 
-// ---------- ViewModel ----------
-
 class MainVm(app: Application) : AndroidViewModel(app) {
     val db = AppDb.get(app)
     val txns = db.txnDao().all()
@@ -512,7 +507,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         }
         val e = o.optJSONArray("budgets") ?: JSONArray()
         val budgets = (0 until e.length()).map { i ->
-            val j = o.optJSONArray("budgets")?.getJSONObject(i) ?: e.getJSONObject(i)
+            val j = e.getJSONObject(i)
             Budget(category = j.getString("category"), limitAmount = j.getLong("limit"))
         }
         val g = o.optJSONArray("goals") ?: JSONArray()
