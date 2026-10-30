@@ -449,6 +449,9 @@ fun readSms(ctx: Context, days: Int, rial: Boolean): List<ParsedSms> {
 fun MoreScreen(vm: MainVm) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    val accounts by vm.accounts.collectAsState(initial = emptyList())
+    val usable = accounts.filter { it.type !in PRICED_TYPES }
+
     var prov by remember { mutableStateOf(AiHub.provider(ctx)) }
     var keyText by remember { mutableStateOf(AiHub.key(ctx, AiHub.provider(ctx))) }
     var modelText by remember { mutableStateOf(AiHub.model(ctx, AiHub.provider(ctx))) }
@@ -458,6 +461,9 @@ fun MoreScreen(vm: MainVm) {
     var msg by remember { mutableStateOf("") }
     var found by remember { mutableStateOf<List<ParsedSms>>(emptyList()) }
     var rial by remember { mutableStateOf(true) }
+    var smsAcc by remember { mutableStateOf(0L) }
+
+    val chosenSmsAcc = if (usable.any { it.id == smsAcc }) smsAcc else (usable.firstOrNull()?.id ?: 0L)
 
     fun saveAi() {
         AiHub.setKey(ctx, prov, keyText)
@@ -587,6 +593,10 @@ fun MoreScreen(vm: MainVm) {
             Checkbox(checked = rial, onCheckedChange = { rial = it })
             Text("مبلغ پیامک‌ها ریال است (تقسیم بر ۱۰ و تبدیل به تومان)")
         }
+        if (usable.isNotEmpty()) {
+            Text("انتخاب حساب برای اعمال موجودی پیامک‌ها:", style = MaterialTheme.typography.bodySmall)
+            AccountChips(usable, chosenSmsAcc) { smsAcc = it }
+        }
         Button(onClick = {
             if (ctx.checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
                 loadSms()
@@ -599,14 +609,19 @@ fun MoreScreen(vm: MainVm) {
                 Text((if (it.income) "+" else "-") + fmt(it.amount) + "   " + it.body.take(40))
             }
             Button(onClick = {
-                vm.addTxns(found.map {
-                    Txn(amount = it.amount, isIncome = it.income, category = "پیامک",
-                        note = it.body.take(60), date = it.date)
-                })
+                vm.addSmsTxns(
+                    found.map {
+                        Txn(
+                            amount = it.amount, isIncome = it.income, category = "پیامک",
+                            note = it.body.take(60), date = it.date, accountId = chosenSmsAcc
+                        )
+                    },
+                    chosenSmsAcc
+                )
                 Prefs.addSmsIds(ctx, found.map { it.id }.toSet())
-                msg = "${found.size} تراکنش اضافه شد"
+                msg = "${found.size} تراکنش اضافه شد و روی حساب اعمال گشت"
                 found = emptyList()
-            }) { Text("افزودن همه (${found.size})") }
+            }) { Text("افزودن همه (${found.size}) و اعمال روی حساب") }
         }
 
         HorizontalDivider()
