@@ -118,51 +118,6 @@ fun dueColor(diff: Int): Color = when {
     else -> Color.Unspecified
 }
 
-// ---------- صفحه‌ی اصلی بخش مالی ----------
-
-@Composable
-fun FinanceRoot(vm: MainVm) {
-    var sub by remember { mutableIntStateOf(0) }
-    var ym by remember { mutableStateOf(currentYM()) }
-    val cheques by vm.cheques.collectAsState(initial = emptyList())
-    val loans by vm.loans.collectAsState(initial = emptyList())
-    val dueCount = cheques.count { it.status == 0 && daysUntil(it.dueDate) <= 1 } +
-        loans.count { l ->
-            val d = loanDue(l)
-            d != null && daysUntil(d) <= 1
-        }
-    val subs = listOf(
-        "نمای کلی", "تراکنش‌ها", "حساب‌ها", "بودجه", "اهداف",
-        "چک و قسط", "طلب و بدهی", "تکراری و اشتراک", "انتقال و خروجی"
-    )
-    Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.statusBarsPadding().horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            subs.forEachIndexed { i, s ->
-                FilterChip(
-                    selected = sub == i,
-                    onClick = { sub = i },
-                    label = { Text(if (i == 5 && dueCount > 0) "$s ($dueCount)" else s) }
-                )
-            }
-        }
-        when (sub) {
-            0 -> OverviewScreen(vm, ym) { ym = it }
-            1 -> TxnScreen(vm, ym) { ym = it }
-            2 -> AccountsScreen(vm)
-            3 -> BudgetScreen(vm, ym) { ym = it }
-            4 -> GoalsScreen(vm)
-            5 -> ChequeLoanScreen(vm)
-            6 -> PeopleScreen(vm)
-            7 -> RecurringScreen(vm)
-            else -> ToolsScreen(vm)
-        }
-    }
-}
-
 // ---------- چک و قسط ----------
 
 @Composable
@@ -494,14 +449,19 @@ fun PersonCard(p: PersonDebt, onPay: () -> Unit, onDelete: () -> Unit) {
 @Composable
 fun PeopleScreen(vm: MainVm) {
     val list by vm.people.collectAsState(initial = emptyList())
+    val accounts by vm.accounts.collectAsState(initial = emptyList())
+    val usable = accounts.filter { it.type !in PRICED_TYPES }
+
     var owedToMe by remember { mutableStateOf(true) }
     var person by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     var dateText by remember { mutableStateOf(todayJalali()) }
     var dateErr by remember { mutableStateOf(false) }
+
     var paying by remember { mutableStateOf<PersonDebt?>(null) }
     var payText by remember { mutableStateOf("") }
+    var payAcc by remember { mutableStateOf(0L) }
 
     val open = list.filter { it.paid < it.amount }
     val settled = list.filter { it.paid >= it.amount }
@@ -549,7 +509,7 @@ fun PeopleScreen(vm: MainVm) {
             )
         }
         open.forEach { p ->
-            PersonCard(p, onPay = { paying = p; payText = "" }, onDelete = { vm.delPerson(p) })
+            PersonCard(p, onPay = { paying = p; payText = ""; payAcc = 0L }, onDelete = { vm.delPerson(p) })
         }
 
         SectionCard("ثبت طلب یا بدهی") {
@@ -588,26 +548,31 @@ fun PeopleScreen(vm: MainVm) {
 
     paying?.let { p ->
         val remaining = p.amount - p.paid
+        val chosenAcc = if (usable.any { it.id == payAcc }) payAcc else (usable.firstOrNull()?.id ?: 0L)
         AlertDialog(
             onDismissRequest = { paying = null },
             title = { Text(p.person) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("مانده: ${fmt(remaining)} تومان")
-                    NumField(payText, { payText = it }, "مبلغ پرداخت‌شده (تومان)")
+                    NumField(payText, { payText = it }, "مبلغ پرداخت‌/وصول‌شده (تومان)")
                     AmountHint(payText)
+                    if (usable.isNotEmpty()) {
+                        Text("حساب بانکی / نقدی (برای اعمال در موجودی)", style = MaterialTheme.typography.bodySmall)
+                        AccountChips(usable, chosenAcc) { payAcc = it }
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     val v = payText.faToLong()
-                    if (v != null && v > 0) vm.payPerson(p, v)
+                    if (v != null && v > 0) vm.payPerson(p, v, chosenAcc)
                     paying = null
-                }) { Text("ثبت") }
+                }) { Text("ثبت جزئی") }
             },
             dismissButton = {
                 TextButton(onClick = {
-                    vm.payPerson(p, remaining)
+                    vm.payPerson(p, remaining, chosenAcc)
                     paying = null
                 }) { Text("تسویه کامل") }
             }
@@ -623,6 +588,7 @@ fun RecurringScreen(vm: MainVm) {
     val accounts by vm.accounts.collectAsState(initial = emptyList())
     val usable = accounts.filter { it.type !in PRICED_TYPES }
     val accName = accounts.associate { it.id to it.name }
+
     var isIncome by remember { mutableStateOf(false) }
     var title by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
@@ -631,6 +597,9 @@ fun RecurringScreen(vm: MainVm) {
     var autoPost by remember { mutableStateOf(true) }
     var pickAcc by remember { mutableStateOf(0L) }
     val accId = if (usable.any { it.id == pickAcc }) pickAcc else (usable.firstOrNull()?.id ?: 0L)
+
+    var postingItem by remember { mutableStateOf<Recurring?>(null) }
+    var postAcc by remember { mutableStateOf(0L) }
 
     val monthlyExp = list.filter { it.active && !it.isIncome }.sumOf { it.amount }
     val monthlyInc = list.filter { it.active && it.isIncome }.sumOf { it.amount }
@@ -664,7 +633,7 @@ fun RecurringScreen(vm: MainVm) {
         list.forEach { r ->
             val c = if (r.isIncome) IncomeColor else ExpenseColor
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(r.title, fontWeight = FontWeight.SemiBold)
@@ -689,6 +658,9 @@ fun RecurringScreen(vm: MainVm) {
                             else "فقط در فهرست (بدون ثبت تراکنش)",
                             style = MaterialTheme.typography.bodySmall
                         )
+                    }
+                    OutlinedButton(onClick = { postingItem = r; postAcc = r.accountId }) {
+                        Text("ثبت در تراکنش‌ها (هم‌اکنون)")
                     }
                 }
             }
@@ -739,6 +711,29 @@ fun RecurringScreen(vm: MainVm) {
                 }
             }) { Text("افزودن") }
         }
+    }
+
+    postingItem?.let { r ->
+        val chosenAcc = if (usable.any { it.id == postAcc }) postAcc else (usable.firstOrNull()?.id ?: 0L)
+        AlertDialog(
+            onDismissRequest = { postingItem = null },
+            title = { Text("ثبت تراکنش: ${r.title}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("${fmt(r.amount)} تومان از کدام حساب کسر/اضافه شود؟")
+                    if (usable.isNotEmpty()) {
+                        AccountChips(usable, chosenAcc) { postAcc = it }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.postRecurringNow(r, chosenAcc)
+                    postingItem = null
+                }) { Text("ثبت") }
+            },
+            dismissButton = { TextButton(onClick = { postingItem = null }) { Text("انصراف") } }
+        )
     }
 }
 
