@@ -246,7 +246,6 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
-// جدول جدید کارها + انتقال کارهای قدیمی
 val MIGRATION_7_8 = object : Migration(7, 8) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL(
@@ -320,7 +319,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val transfers = db.transferDao().all()
 
     init {
-        // هر بار حساب‌ها عوض شوند، ثروت خالص امروز ذخیره می‌شود (برای نمودار روند)
         viewModelScope.launch {
             db.accountDao().all().collect { list ->
                 if (list.isNotEmpty()) {
@@ -328,7 +326,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        // ثبت خودکار تراکنش‌های تکراری که موعدشان رسیده
         viewModelScope.launch {
             try {
                 applyRecurringDue(db)
@@ -337,7 +334,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ثبت تراکنش + تغییر خودکار موجودی حساب
     fun addTxn(
         amount: Long, income: Boolean, category: String, note: String,
         date: Long, accountId: Long
@@ -345,7 +341,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         db.postTxn(amount, income, category, note, date, accountId)
     }
 
-    // ویرایش کامل تراکنش (مبلغ، نوع درآمد/هزینه، دسته، توضیح، تاریخ و حساب)
     fun updateTxn(
         old: Txn, amount: Long, income: Boolean,
         category: String, note: String, date: Long, accountId: Long
@@ -363,10 +358,8 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // واردکردن گروهی بدون تغییر حساب
     fun addTxns(list: List<Txn>) = viewModelScope.launch { db.txnDao().insertAll(list) }
 
-    // واردکردن گروهی پیامک‌ها با امکان اعمال روی یک حساب مشخص
     fun importSmsTxns(list: List<Txn>, accountId: Long) = viewModelScope.launch {
         db.withTransaction {
             for (t in list) {
@@ -400,7 +393,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     fun updateAccount(a: Account) = viewModelScope.launch { db.accountDao().update(a) }
     fun delAccount(a: Account) = viewModelScope.launch { db.accountDao().delete(a) }
 
-    // بودجه: اگر برای این دسته قبلاً بودجه بوده، مبلغش عوض می‌شود
     fun setBudget(category: String, limit: Long) = viewModelScope.launch {
         val existing = db.budgetDao().list().firstOrNull { it.category == category }
         if (existing != null) {
@@ -414,7 +406,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     fun addGoal(name: String, target: Long, saved: Long) =
         viewModelScope.launch { db.goalDao().insert(Goal(name = name, target = target, saved = saved)) }
 
-    // افزودن یا برداشت از هدف پس‌انداز (همراه با ثبت تراکنش اختیاری روی حساب انتخاب‌شده)
     fun addToGoal(g: Goal, delta: Long, accountId: Long = 0L) = viewModelScope.launch {
         db.withTransaction {
             val newSaved = (g.saved + delta).coerceAtLeast(0L)
@@ -542,7 +533,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             db.foodDao().insertAll(foods)
             db.budgetDao().insertAll(budgets)
             db.goalDao().insertAll(goals)
-            db.restoreAll(o)
+            db.restoreAllExtra(o)
         }
     }
 }
