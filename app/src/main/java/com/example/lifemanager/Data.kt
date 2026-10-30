@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.room.*
 import androidx.room.migration.Migration
+import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
@@ -25,6 +26,7 @@ data class Txn(
     @ColumnInfo(defaultValue = "0") val accountId: Long = 0
 )
 
+// جدول قدیمی کارها (فقط برای سازگاری؛ کارهای جدید در جدول todos ذخیره می‌شوند)
 @Entity(tableName = "tasks")
 data class TaskItem(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -245,13 +247,31 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `todos` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`title` TEXT NOT NULL, `note` TEXT NOT NULL, `done` INTEGER NOT NULL, " +
+                "`dueDate` INTEGER NOT NULL, `hasTime` INTEGER NOT NULL, `priority` INTEGER NOT NULL, " +
+                "`category` TEXT NOT NULL, `repeatMode` INTEGER NOT NULL, `remind` INTEGER NOT NULL, " +
+                "`subs` TEXT NOT NULL, `doneAt` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "INSERT INTO `todos` (`title`, `note`, `done`, `dueDate`, `hasTime`, `priority`, " +
+                "`category`, `repeatMode`, `remind`, `subs`, `doneAt`) " +
+                "SELECT `title`, '', `done`, 0, 0, 0, '', 0, 0, '', 0 FROM `tasks`"
+        )
+    }
+}
+
 @Database(
     entities = [
         Txn::class, TaskItem::class, Food::class, Account::class,
         Budget::class, Goal::class, Snapshot::class,
-        Cheque::class, Loan::class, PersonDebt::class, Recurring::class, Transfer::class
+        Cheque::class, Loan::class, PersonDebt::class, Recurring::class, Transfer::class,
+        Todo::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -267,6 +287,7 @@ abstract class AppDb : RoomDatabase() {
     abstract fun personDebtDao(): PersonDebtDao
     abstract fun recurringDao(): RecurringDao
     abstract fun transferDao(): TransferDao
+    abstract fun todoDao(): TodoDao
 
     companion object {
         @Volatile private var inst: AppDb? = null
@@ -274,7 +295,7 @@ abstract class AppDb : RoomDatabase() {
             inst ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "life.db")
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
-                    MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7
+                    MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
                 )
                 .build().also { inst = it }
         }
@@ -299,7 +320,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val transfers = db.transferDao().all()
 
     init {
-        // هر بار حساب‌ها عوض شوند، ثروت خالص امروز ذخیره می‌شود (برای نمودار روند)
         viewModelScope.launch {
             db.accountDao().all().collect { list ->
                 if (list.isNotEmpty()) {
@@ -307,7 +327,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        // ثبت خودکار تراکنش‌های تکراری که موعدشان رسیده
         viewModelScope.launch {
             try {
                 applyRecurringDue(db)
@@ -316,7 +335,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ثبت تراکنش + تغییر خودکار موجودی حساب
     fun addTxn(
         amount: Long, income: Boolean, category: String, note: String,
         date: Long, accountId: Long
@@ -324,18 +342,36 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         db.postTxn(amount, income, category, note, date, accountId)
     }
 
-    // ویرایش تراکنش: اثر قبلی برگردانده و اثر جدید اعمال می‌شود
-    fun updateTxn(old: Txn, amount: Long, category: String, note: String, date: Long) =
-        viewModelScope.launch {
-            db.withTransaction {
-                db.applyToAccount(old.accountId, old.isIncome, old.amount, true)
-                db.applyToAccount(old.accountId, old.isIncome, amount, false)
-                db.txnDao().update(old.copy(amount = amount, category = category, note = note, date = date))
+    fun updateTxn(
+        old: Txn, amount: Long, isIncome: Boolean,
+        category: String, note: String, date: Long, accountId: Long
+    ) = viewModelScope.launch {
+        db.withTransaction {
+            db.applyToAccount(old.accountId, old.isIncome, old.amount, true)
+            db.applyToAccount(accountId, isIncome, amount, false)
+            db.txnDao().update(
+                old.copy(
+                    amount = amount, isIncome = isIncome,
+                    category = category, note = note,
+                    date = date, accountId = accountId
+                )
+            )
+        }
+    }
+
+    fun addTxns(list: List<Txn>) = viewModelScope.launch { db.txnDao().insertAll(list) }
+
+    fun addSmsTxns(list: List<Txn>, accountId: Long) = viewModelScope.launch {
+        db.withTransaction {
+            if (accountId > 0) {
+                for (t in list) {
+                    db.postTxn(t.amount, t.isIncome, t.category, t.note, t.date, accountId)
+                }
+            } else {
+                db.txnDao().insertAll(list)
             }
         }
-
-    // واردکردن گروهی (مثلاً پیامک): روی حساب‌ها اثر نمی‌گذارد
-    fun addTxns(list: List<Txn>) = viewModelScope.launch { db.txnDao().insertAll(list) }
+    }
 
     fun delTxn(t: Txn) = viewModelScope.launch {
         db.withTransaction {
@@ -343,10 +379,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             db.txnDao().delete(t)
         }
     }
-
-    fun addTask(title: String) = viewModelScope.launch { db.taskDao().insert(TaskItem(title = title)) }
-    fun toggle(t: TaskItem) = viewModelScope.launch { db.taskDao().update(t.copy(done = !t.done)) }
-    fun delTask(t: TaskItem) = viewModelScope.launch { db.taskDao().delete(t) }
 
     fun addFoods(list: List<Food>) = viewModelScope.launch { db.foodDao().insertAll(list) }
     fun delFood(f: Food) = viewModelScope.launch { db.foodDao().delete(f) }
@@ -363,7 +395,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     fun updateAccount(a: Account) = viewModelScope.launch { db.accountDao().update(a) }
     fun delAccount(a: Account) = viewModelScope.launch { db.accountDao().delete(a) }
 
-    // بودجه: اگر برای این دسته قبلاً بودجه بوده، مبلغش عوض می‌شود
     fun setBudget(category: String, limit: Long) = viewModelScope.launch {
         val existing = db.budgetDao().list().firstOrNull { it.category == category }
         if (existing != null) {
@@ -376,8 +407,27 @@ class MainVm(app: Application) : AndroidViewModel(app) {
 
     fun addGoal(name: String, target: Long, saved: Long) =
         viewModelScope.launch { db.goalDao().insert(Goal(name = name, target = target, saved = saved)) }
-    fun addToGoal(g: Goal, delta: Long) =
-        viewModelScope.launch { db.goalDao().update(g.copy(saved = (g.saved + delta).coerceAtLeast(0L))) }
+
+    fun addToGoal(g: Goal, delta: Long, accountId: Long = 0L) = viewModelScope.launch {
+        db.withTransaction {
+            val newSaved = (g.saved + delta).coerceAtLeast(0L)
+            val actualDelta = newSaved - g.saved
+            db.goalDao().update(g.copy(saved = newSaved))
+            if (accountId > 0L && actualDelta != 0L) {
+                val isDepositToGoal = actualDelta > 0
+                val amt = kotlin.math.abs(actualDelta)
+                db.postTxn(
+                    amount = amt,
+                    income = !isDepositToGoal,
+                    category = "پس‌انداز",
+                    note = (if (isDepositToGoal) "واریز به هدف: " else "برداشت از هدف: ") + g.name,
+                    date = System.currentTimeMillis(),
+                    accountId = accountId
+                )
+            }
+        }
+    }
+
     fun delGoal(g: Goal) = viewModelScope.launch { db.goalDao().delete(g) }
 
     suspend fun exportJson(): String {
@@ -425,7 +475,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             )
         }
         o.put("goals", g)
-        db.putExtraJson(o)
+        db.putAllExtra(o)
         return o.toString(2)
     }
 
@@ -485,7 +535,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             db.foodDao().insertAll(foods)
             db.budgetDao().insertAll(budgets)
             db.goalDao().insertAll(goals)
-            db.restoreExtra(o)
+            db.restoreAll(o)
         }
     }
 }
