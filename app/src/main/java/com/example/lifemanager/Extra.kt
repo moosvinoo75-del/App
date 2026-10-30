@@ -320,8 +320,23 @@ fun MainVm.addPerson(person: String, amount: Long, owedToMe: Boolean, note: Stri
         )
     }
 
-fun MainVm.payPerson(p: PersonDebt, delta: Long) = viewModelScope.launch {
-    db.personDebtDao().update(p.copy(paid = (p.paid + delta).coerceIn(0L, p.amount)))
+// تسویه طلب یا بدهی فرد + امکان ثبت همزمان تراکنش در حساب انتخابی
+fun MainVm.payPerson(p: PersonDebt, delta: Long, accountId: Long = 0L) = viewModelScope.launch {
+    db.withTransaction {
+        val newPaid = (p.paid + delta).coerceIn(0L, p.amount)
+        val actual = newPaid - p.paid
+        db.personDebtDao().update(p.copy(paid = newPaid))
+        if (accountId > 0L && actual > 0L) {
+            db.postTxn(
+                amount = actual,
+                income = p.owedToMe,
+                category = if (p.owedToMe) "وصول طلب" else "پرداخت بدهی",
+                note = (if (p.owedToMe) "دریافت طلب از " else "پرداخت بدهی به ") + p.person,
+                date = System.currentTimeMillis(),
+                accountId = accountId
+            )
+        }
+    }
 }
 
 fun MainVm.delPerson(p: PersonDebt) = viewModelScope.launch { db.personDebtDao().delete(p) }
@@ -344,6 +359,22 @@ fun MainVm.setRecurringActive(r: Recurring, active: Boolean) = viewModelScope.la
         db.recurringDao().update(r.copy(active = true, lastIdx = recurringStartIdx(r.day)))
     } else {
         db.recurringDao().update(r.copy(active = false))
+    }
+}
+
+// ثبت دستی یک مورد تکراری / اشتراک در لحظه
+fun MainVm.postRecurringNow(r: Recurring, accountId: Long) = viewModelScope.launch {
+    db.withTransaction {
+        val j = jalaliOf(System.currentTimeMillis())
+        val curIdx = j[0] * 12 + (j[1] - 1)
+        val targetAcc = if (accountId > 0L) accountId else r.accountId
+        db.postTxn(
+            r.amount, r.isIncome, r.category.ifBlank { r.title }, r.title,
+            System.currentTimeMillis(), targetAcc
+        )
+        if (curIdx > r.lastIdx) {
+            db.recurringDao().update(r.copy(lastIdx = curIdx))
+        }
     }
 }
 
