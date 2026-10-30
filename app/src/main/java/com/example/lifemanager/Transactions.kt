@@ -10,6 +10,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,8 +36,8 @@ fun TxnScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
     var pickedAcc by remember { mutableStateOf(0L) }
 
     var query by remember { mutableStateOf("") }
-    var filter by remember { mutableIntStateOf(0) } // 0: همه، 1: درآمد، 2: هزینه
-    var selectedAccFilter by remember { mutableStateOf(0L) } // 0: همه‌ی حساب‌ها
+    var filter by remember { mutableIntStateOf(0) }
+    var selectedAccFilter by remember { mutableStateOf(0L) }
 
     var editing by remember { mutableStateOf<Txn?>(null) }
     var eAmount by remember { mutableStateOf("") }
@@ -47,7 +48,6 @@ fun TxnScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
     var eDateErr by remember { mutableStateOf(false) }
     var eAccId by remember { mutableStateOf(0L) }
 
-    // فقط حساب‌های نقد/بانک/بدهی؛ طلا و ارز و سهام ارزششان مقدار × قیمت است
     val usable = accounts.filter { it.type !in PRICED_TYPES }
     val accId = if (usable.any { it.id == pickedAcc }) pickedAcc else (usable.firstOrNull()?.id ?: 0L)
     val accName = accounts.associate { it.id to it.name }
@@ -86,7 +86,7 @@ fun TxnScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
         eNote = t.note
         eDate = jalaliText(t.date)
         eDateErr = false
-        eAccId = if (usable.any { it.id == t.accountId }) t.accountId else (usable.firstOrNull()?.id ?: 0L)
+        eAccId = t.accountId  // همیشه مقدار اصلی رو نگه دار
     }
 
     LazyColumn(
@@ -318,7 +318,8 @@ fun TxnScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
     }
 
     editing?.let { t ->
-        val chosenAcc = if (usable.any { it.id == eAccId }) eAccId else (usable.firstOrNull()?.id ?: 0L)
+        val chosenAcc = eAccId
+        val accExists = usable.any { it.id == chosenAcc }
         AlertDialog(
             onDismissRequest = { editing = null },
             title = { Text("ویرایش تراکنش") },
@@ -347,7 +348,15 @@ fun TxnScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
 
                     if (usable.isNotEmpty()) {
                         Text("حساب", style = MaterialTheme.typography.bodySmall)
-                        AccountChips(usable, chosenAcc) { eAccId = it }
+                        if (!accExists && chosenAcc > 0L) {
+                            val deletedName = accName[chosenAcc] ?: "حساب حذف‌شده"
+                            Text(
+                                "حساب فعلی: $deletedName (حذف شده یا غیرفعال)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        AccountChips(usable, if (accExists) chosenAcc else 0L) { eAccId = it }
                     }
 
                     OutlinedTextField(
