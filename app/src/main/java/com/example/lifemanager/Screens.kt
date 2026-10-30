@@ -6,17 +6,23 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +43,23 @@ fun FoodScreen(vm: MainVm) {
     var text by remember { mutableStateOf("") }
     var msg by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+
+    var showCatalog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedCat by remember { mutableStateOf("") }
+    var pickedRef by remember { mutableStateOf<FoodRef?>(null) }
+
     val total = list.sumOf { it.kcal }
+
+    val filteredCatalog = remember(searchQuery, selectedCat) {
+        val q = digits(searchQuery).replace('\u200c', ' ').replace('ي', 'ی').replace('ك', 'ک').trim()
+        LocalFood.catalog.filter { item ->
+            (selectedCat.isEmpty() || item.category == selectedCat) &&
+                (q.isEmpty() ||
+                    item.name.replace('\u200c', ' ').contains(q) ||
+                    item.category.replace('\u200c', ' ').contains(q))
+        }
+    }
 
     LazyColumn(
         Modifier.fillMaxSize().statusBarsPadding().padding(16.dp),
@@ -53,47 +75,143 @@ fun FoodScreen(vm: MainVm) {
         item {
             OutlinedTextField(
                 value = text, onValueChange = { text = it },
-                label = { Text("مثلاً: ۲۰۰ گرم برنج و ۱۰۰ گرم مرغ") },
+                label = { Text("مثلاً: ۲۰۰ گرم برنج و ۱ سیخ کباب کوبیده") },
                 minLines = 2, modifier = Modifier.fillMaxWidth()
             )
         }
         item {
-            Button(enabled = !busy, onClick = {
-                if (text.isNotBlank()) {
-                    busy = true
-                    msg = ""
-                    scope.launch {
-                        try {
-                            if (AiHub.isReady(ctx)) {
-                                val out = AiHub.ask(ctx, AiHub.FOOD_PROMPT, text)
-                                val arr = JSONArray(out.substring(out.indexOf('['), out.lastIndexOf(']') + 1))
-                                val now = System.currentTimeMillis()
-                                val foods = (0 until arr.length()).map { i ->
-                                    val o = arr.getJSONObject(i)
-                                    Food(
-                                        name = o.getString("name"), grams = o.optInt("grams", 0),
-                                        kcal = o.getDouble("kcal").toInt(), date = now
-                                    )
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        if (text.isNotBlank()) {
+                            busy = true
+                            msg = ""
+                            scope.launch {
+                                try {
+                                    if (AiHub.isReady(ctx)) {
+                                        val out = AiHub.ask(ctx, AiHub.FOOD_PROMPT, text)
+                                        val arr = JSONArray(out.substring(out.indexOf('['), out.lastIndexOf(']') + 1))
+                                        val now = System.currentTimeMillis()
+                                        val foods = (0 until arr.length()).map { i ->
+                                            val o = arr.getJSONObject(i)
+                                            Food(
+                                                name = o.getString("name"), grams = o.optInt("grams", 0),
+                                                kcal = o.getDouble("kcal").toInt(), date = now
+                                            )
+                                        }
+                                        vm.addFoods(foods)
+                                    } else {
+                                        val (foods, missing) = LocalFood.estimate(text)
+                                        vm.addFoods(foods)
+                                        if (missing.isNotEmpty()) {
+                                            msg = "کالری این‌ها پیدا نشد: " + missing.joinToString("، ") +
+                                                " — از دکمه‌ی «بانک غذاها» انتخاب کن یا کلید API را در تب «بیشتر» بگذار."
+                                        }
+                                    }
+                                    text = ""
+                                } catch (e: Exception) {
+                                    msg = "خطا: ${e.message}"
                                 }
-                                vm.addFoods(foods)
-                            } else {
-                                val (foods, missing) = LocalFood.estimate(text)
-                                vm.addFoods(foods)
-                                if (missing.isNotEmpty()) {
-                                    msg = "کالری این‌ها پیدا نشد: " + missing.joinToString("، ") +
-                                        " — برای تخمین دقیق‌تر کلید API را در تب «بیشتر» بگذار."
-                                }
+                                busy = false
                             }
-                            text = ""
-                        } catch (e: Exception) {
-                            msg = "خطا: ${e.message}"
                         }
-                        busy = false
                     }
+                ) { Text(if (busy) "در حال محاسبه..." else "محاسبه و ثبت") }
+
+                OutlinedButton(
+                    onClick = { showCatalog = !showCatalog },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(if (showCatalog) "بستن بانک غذاها" else "📖 بانک غذاها (${LocalFood.catalog.size})")
                 }
-            }) { Text(if (busy) "در حال محاسبه..." else "محاسبه و ثبت") }
+            }
         }
         if (msg.isNotBlank()) item { Text(msg) }
+
+        if (showCatalog) {
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("انتخاب از بانک غذاها", style = MaterialTheme.typography.titleMedium)
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            label = { Text("جستجوی نام غذا (مثلاً قرمه سبزی، پیتزا، شیر...)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FilterChip(
+                                selected = selectedCat.isEmpty(),
+                                onClick = { selectedCat = "" },
+                                label = { Text("همه (${LocalFood.catalog.size})") }
+                            )
+                            LocalFood.categories.forEach { c ->
+                                FilterChip(
+                                    selected = selectedCat == c,
+                                    onClick = { selectedCat = if (selectedCat == c) "" else c },
+                                    label = { Text(c) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            items(filteredCatalog, key = { "ref_${it.name}" }) { ref ->
+                Card(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                        .clickable { pickedRef = ref }
+                ) {
+                    Row(
+                        Modifier.padding(12.dp).fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(ref.name, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "${ref.category} · ${ref.unit}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "پروتئین: ${qtyText(ref.protein.toDouble())}g · کربوهیدرات: ${qtyText(ref.carbs.toDouble())}g · چربی: ${qtyText(ref.fat.toDouble())}g",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                "${ref.calories} kcal",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                "＋ افزودن",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+            item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
+        }
+
+        if (list.isNotEmpty()) {
+            item {
+                Text("ثبت‌شده‌های امروز", style = MaterialTheme.typography.titleMedium)
+            }
+        }
         items(list, key = { it.id }) { f ->
             Card(Modifier.fillMaxWidth()) {
                 Row(
@@ -110,6 +228,105 @@ fun FoodScreen(vm: MainVm) {
                 }
             }
         }
+    }
+
+    pickedRef?.let { ref ->
+        var byGram by remember(ref) { mutableStateOf(false) }
+        var amountText by remember(ref) { mutableStateOf("1") }
+
+        val num = digits(amountText).replace('٫', '.').replace('/', '.').trim().toDoubleOrNull() ?: 0.0
+        val factor = if (byGram && ref.unitGrams > 0) num / ref.unitGrams else num
+        val calcKcal = Math.round(factor * ref.calories).toInt()
+        val calcGrams = if (byGram) num.toInt() else Math.round(factor * ref.unitGrams).toInt()
+        val calcProt = factor * ref.protein
+        val calcCarb = factor * ref.carbs
+        val calcFat = factor * ref.fat
+
+        AlertDialog(
+            onDismissRequest = { pickedRef = null },
+            title = { Text(ref.name) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "واحد استاندارد: ${ref.unit} (${ref.calories} کالری)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (ref.unitGrams > 0) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = !byGram,
+                                onClick = { byGram = false; amountText = "1" },
+                                label = { Text("بر اساس واحد / پُرس") }
+                            )
+                            FilterChip(
+                                selected = byGram,
+                                onClick = { byGram = true; amountText = ref.unitGrams.toString() },
+                                label = { Text("بر اساس گرم") }
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = amountText,
+                        onValueChange = { amountText = it },
+                        label = { Text(if (byGram) "وزن (گرم)" else "تعداد واحد (مثلاً 1 یا 0.5 یا 2)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (!byGram) {
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf("0.5" to "نصف", "1" to "۱ واحد", "1.5" to "۱.۵ واحد", "2" to "۲ واحد", "3" to "۳ واحد")
+                                .forEach { (v, l) ->
+                                    FilterChip(
+                                        selected = amountText == v,
+                                        onClick = { amountText = v },
+                                        label = { Text(l) }
+                                    )
+                                }
+                        }
+                    }
+                    if (num > 0) {
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    "کالری: ${fmt(calcKcal.toLong())} kcal",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    "پروتئین: ${qtyText(calcProt)}g · کربوهیدرات: ${qtyText(calcCarb)}g · چربی: ${qtyText(calcFat)}g",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (num > 0) {
+                        vm.addFoods(
+                            listOf(
+                                Food(
+                                    name = ref.name,
+                                    grams = calcGrams,
+                                    kcal = calcKcal,
+                                    date = System.currentTimeMillis()
+                                )
+                            )
+                        )
+                        pickedRef = null
+                    }
+                }) { Text("ثبت در امروز") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pickedRef = null }) { Text("انصراف") }
+            }
+        )
     }
 }
 
