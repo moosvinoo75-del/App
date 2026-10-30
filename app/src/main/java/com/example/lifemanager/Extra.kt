@@ -320,8 +320,23 @@ fun MainVm.addPerson(person: String, amount: Long, owedToMe: Boolean, note: Stri
         )
     }
 
-fun MainVm.payPerson(p: PersonDebt, delta: Long) = viewModelScope.launch {
-    db.personDebtDao().update(p.copy(paid = (p.paid + delta).coerceIn(0L, p.amount)))
+// تسویه/پرداخت طلب یا بدهی شخص همراه با ثبت تراکنش و اثر روی حساب
+fun MainVm.payPerson(p: PersonDebt, delta: Long, accountId: Long) = viewModelScope.launch {
+    db.withTransaction {
+        if (delta > 0L) {
+            val noteText = if (p.owedToMe) "وصول طلب از ${p.person}" else "پرداخت بدهی به ${p.person}"
+            db.postTxn(
+                amount = delta,
+                income = p.owedToMe,
+                category = "اشخاص",
+                note = noteText + if (p.note.isNotBlank()) " (${p.note})" else "",
+                date = System.currentTimeMillis(),
+                accountId = accountId
+            )
+            val newPaid = (p.paid + delta).coerceIn(0L, p.amount)
+            db.personDebtDao().update(p.copy(paid = newPaid))
+        }
+    }
 }
 
 fun MainVm.delPerson(p: PersonDebt) = viewModelScope.launch { db.personDebtDao().delete(p) }
@@ -337,6 +352,16 @@ fun MainVm.addRecurring(
             autoPost = autoPost, active = true
         )
     )
+}
+
+// ثبت دستی تراکنش تکراری (برای مواردی که ثبت خودکار خاموش است)
+fun MainVm.payRecurringManual(r: Recurring, accountId: Long) = viewModelScope.launch {
+    db.withTransaction {
+        db.postTxn(
+            r.amount, r.isIncome, r.category.ifBlank { r.title }, r.title,
+            System.currentTimeMillis(), if (accountId > 0) accountId else r.accountId
+        )
+    }
 }
 
 fun MainVm.setRecurringActive(r: Recurring, active: Boolean) = viewModelScope.launch {
