@@ -35,14 +35,17 @@ fun TxnScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
     var pickedAcc by remember { mutableStateOf(0L) }
 
     var query by remember { mutableStateOf("") }
-    var filter by remember { mutableIntStateOf(0) }
+    var filter by remember { mutableIntStateOf(0) } // 0: همه، 1: درآمد، 2: هزینه
+    var filterAccId by remember { mutableStateOf(0L) } // 0: همه حساب‌ها
 
     var editing by remember { mutableStateOf<Txn?>(null) }
     var eAmount by remember { mutableStateOf("") }
+    var eIncome by remember { mutableStateOf(false) }
     var eCat by remember { mutableStateOf("") }
     var eNote by remember { mutableStateOf("") }
     var eDate by remember { mutableStateOf("") }
     var eDateErr by remember { mutableStateOf(false) }
+    var eAccId by remember { mutableStateOf(0L) }
 
     // فقط حساب‌های نقد/بانک/بدهی؛ طلا و ارز و سهام ارزششان مقدار × قیمت است
     val usable = accounts.filter { it.type !in PRICED_TYPES }
@@ -53,9 +56,11 @@ fun TxnScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
     val income = month.filter { it.isIncome }.sumOf { it.amount }
     val expense = month.filter { !it.isIncome }.sumOf { it.amount }
     val q = query.trim()
-    val shown = month.filter {
-        (filter == 0 || (filter == 1 && it.isIncome) || (filter == 2 && !it.isIncome)) &&
-            (q.isEmpty() || it.category.contains(q) || it.note.contains(q))
+    val shown = month.filter { t ->
+        val matchesType = filter == 0 || (filter == 1 && t.isIncome) || (filter == 2 && !t.isIncome)
+        val matchesAcc = filterAccId == 0L || t.accountId == filterAccId
+        val matchesQuery = q.isEmpty() || t.category.contains(q) || t.note.contains(q)
+        matchesType && matchesAcc && matchesQuery
     }
     val groups = shown.groupBy { jalaliText(it.date) }
 
@@ -75,10 +80,12 @@ fun TxnScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
     fun open(t: Txn) {
         editing = t
         eAmount = t.amount.toString()
+        eIncome = t.isIncome
         eCat = t.category
         eNote = t.note
         eDate = jalaliText(t.date)
         eDateErr = false
+        eAccId = if (usable.any { it.id == t.accountId }) t.accountId else (usable.firstOrNull()?.id ?: 0L)
     }
 
     LazyColumn(
@@ -208,12 +215,37 @@ fun TxnScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
             )
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 FilterChip(selected = filter == 0, onClick = { filter = 0 }, label = { Text("همه") })
                 FilterChip(selected = filter == 1, onClick = { filter = 1 }, label = { Text("درآمد") })
                 FilterChip(selected = filter == 2, onClick = { filter = 2 }, label = { Text("هزینه") })
             }
         }
+        if (usable.size > 1) {
+            item {
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = filterAccId == 0L,
+                        onClick = { filterAccId = 0L },
+                        label = { Text("همه‌ی حساب‌ها") }
+                    )
+                    usable.forEach { a ->
+                        FilterChip(
+                            selected = filterAccId == a.id,
+                            onClick = { filterAccId = a.id },
+                            label = { Text(a.name) }
+                        )
+                    }
+                }
+            }
+        }
+
         if (shown.isEmpty()) {
             item {
                 Text(
@@ -290,25 +322,59 @@ fun TxnScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
             onDismissRequest = { editing = null },
             title = { Text("ویرایش تراکنش") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !eIncome, onClick = { eIncome = false },
+                            label = { Text("هزینه") }, modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = eIncome, onClick = { eIncome = true },
+                            label = { Text("درآمد") }, modifier = Modifier.weight(1f)
+                        )
+                    }
                     OutlinedTextField(
                         value = eAmount, onValueChange = { eAmount = it },
                         label = { Text("مبلغ (تومان)") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
                     )
                     AmountHint(eAmount)
+
+                    if (usable.isNotEmpty()) {
+                        Text("حساب", style = MaterialTheme.typography.bodySmall)
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            usable.forEach { a ->
+                                FilterChip(
+                                    selected = eAccId == a.id,
+                                    onClick = { eAccId = a.id },
+                                    label = { Text(a.name) }
+                                )
+                            }
+                        }
+                    }
+
                     OutlinedTextField(
                         value = eCat, onValueChange = { eCat = it },
-                        label = { Text("دسته") }, singleLine = true
+                        label = { Text("دسته") }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
                         value = eNote, onValueChange = { eNote = it },
-                        label = { Text("توضیح") }, singleLine = true
+                        label = { Text("توضیح") }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
                         value = eDate, onValueChange = { eDate = it; eDateErr = false },
                         label = { Text(if (eDateErr) "تاریخ نامعتبر است" else "تاریخ شمسی") },
-                        isError = eDateErr, singleLine = true
+                        isError = eDateErr, singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             },
@@ -316,10 +382,11 @@ fun TxnScreen(vm: MainVm, ym: YM, onYm: (YM) -> Unit) {
                 TextButton(onClick = {
                     val a = eAmount.faToLong()
                     val d = parseJalali(eDate)
+                    val targetAcc = if (usable.any { it.id == eAccId }) eAccId else t.accountId
                     if (d == null) {
                         eDateErr = true
                     } else if (a != null && a > 0) {
-                        vm.updateTxn(t, a, eCat.trim(), eNote.trim(), d)
+                        vm.updateTxn(t, a, eIncome, eCat.trim(), eNote.trim(), d, targetAcc)
                         editing = null
                     }
                 }) { Text("ذخیره") }
