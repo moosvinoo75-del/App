@@ -18,9 +18,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
 
-// ---------- جدول‌های جدید ----------
+// ---------- جدول‌های جدید مالی و جانبی ----------
 
-// status: 0 در انتظار، 1 انجام شد (پاس/وصول)، 2 برگشتی
 @Entity(tableName = "cheques")
 data class Cheque(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -53,7 +52,6 @@ data class PersonDebt(
     val date: Long
 )
 
-// lastIdx = شماره‌ی آخرین ماهی که ثبت شده (سال × ۱۲ + ماه − ۱)
 @Entity(tableName = "recurring")
 data class Recurring(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -169,7 +167,6 @@ fun dayStartOf(ms: Long): Long {
     return c.timeInMillis
 }
 
-// چند روز تا این تاریخ (منفی = گذشته)
 fun daysUntil(ms: Long): Int =
     Math.round((dayStartOf(ms) - startOfDay()) / 86_400_000.0).toInt()
 
@@ -180,7 +177,6 @@ fun dueText(diff: Int): String = when {
     else -> "$diff روز مانده"
 }
 
-// تاریخ سررسید قسط بعدی؛ اگر وام تسویه شده باشد null
 fun loanDue(l: Loan): Long? {
     if (l.paid >= l.totalCount) return null
     val j = jalaliOf(l.firstDue)
@@ -201,7 +197,6 @@ suspend fun AppDb.applyToAccount(accId: Long, income: Boolean, amount: Long, rev
     accountDao().update(acc.copy(balance = acc.balance + signed))
 }
 
-// ثبت تراکنش و اعمال اثرش؛ حساب نامعتبر → اولین حساب نقد/بانک/بدهی (یا ساخت «کیف پول»)
 suspend fun AppDb.postTxn(
     amount: Long, income: Boolean, category: String, note: String,
     date: Long, accountId: Long
@@ -231,7 +226,6 @@ private fun recurringStartIdx(day: Int): Int {
     return if (j[2] < dayEff) curIdx - 1 else curIdx
 }
 
-// تراکنش‌های تکراریِ سررسیدشده را ثبت می‌کند (هم هنگام باز شدن برنامه، هم در پس‌زمینه)
 suspend fun applyRecurringDue(db: AppDb) {
     db.withTransaction {
         val j = jalaliOf(System.currentTimeMillis())
@@ -271,7 +265,6 @@ fun MainVm.addCheque(party: String, amount: Long, dueDate: Long, issued: Boolean
 
 fun MainVm.delCheque(c: Cheque) = viewModelScope.launch { db.chequeDao().delete(c) }
 
-// passed = true: چک پاس/وصول شد و تراکنش ثبت می‌شود؛ false: برگشت خورد
 fun MainVm.settleCheque(c: Cheque, passed: Boolean, accountId: Long) = viewModelScope.launch {
     db.withTransaction {
         if (passed) {
@@ -320,7 +313,6 @@ fun MainVm.addPerson(person: String, amount: Long, owedToMe: Boolean, note: Stri
         )
     }
 
-// تسویه طلب یا بدهی فرد + امکان ثبت همزمان تراکنش در حساب انتخابی
 fun MainVm.payPerson(p: PersonDebt, delta: Long, accountId: Long = 0L) = viewModelScope.launch {
     db.withTransaction {
         val newPaid = (p.paid + delta).coerceIn(0L, p.amount)
@@ -362,7 +354,6 @@ fun MainVm.setRecurringActive(r: Recurring, active: Boolean) = viewModelScope.la
     }
 }
 
-// ثبت دستی یک مورد تکراری / اشتراک در لحظه
 fun MainVm.postRecurringNow(r: Recurring, accountId: Long) = viewModelScope.launch {
     db.withTransaction {
         val j = jalaliOf(System.currentTimeMillis())
@@ -380,7 +371,6 @@ fun MainVm.postRecurringNow(r: Recurring, accountId: Long) = viewModelScope.laun
 
 fun MainVm.delRecurring(r: Recurring) = viewModelScope.launch { db.recurringDao().delete(r) }
 
-// انتقال پول بین دو حساب (درآمد/هزینه حساب نمی‌شود)
 fun MainVm.transfer(fromId: Long, toId: Long, amount: Long, note: String, date: Long) =
     viewModelScope.launch {
         if (fromId != toId && amount > 0) {
@@ -447,7 +437,6 @@ fun showDueNotification(ctx: Context, lines: List<String>) {
     nm.notify(1001, n)
 }
 
-// هر ۱۲ ساعت اجرا می‌شود؛ تراکنش‌های تکراری را ثبت و حداکثر روزی یک بار اعلان می‌دهد
 class ReminderWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         try {
