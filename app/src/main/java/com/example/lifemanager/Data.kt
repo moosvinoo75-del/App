@@ -26,7 +26,6 @@ data class Txn(
     @ColumnInfo(defaultValue = "0") val accountId: Long = 0
 )
 
-// جدول قدیمی کارها (فقط برای سازگاری؛ کارهای جدید در جدول todos ذخیره می‌شوند)
 @Entity(tableName = "tasks")
 data class TaskItem(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
