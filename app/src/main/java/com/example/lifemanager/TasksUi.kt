@@ -71,6 +71,7 @@ fun TasksScreen(vm: MainVm) {
     var editing by remember { mutableStateOf<Todo?>(null) }
     var creating by remember { mutableStateOf(false) }
 
+    // یادآورها را دوباره زمان‌بندی می‌کند (مثلاً بعد از بازیابی بکاپ)
     LaunchedEffect(Unit) {
         vm.db.todoDao().list().filter { it.remind && !it.done }
             .forEach { scheduleTodoReminder(ctx, it) }
@@ -80,13 +81,13 @@ fun TasksScreen(vm: MainVm) {
     val todayEnd = dayStart + 86_400_000L
     val open = todos.filter { !it.done }
     val order = compareBy<Todo>(
-        { if (it.dueDate == 0L) Long.MAX_VALUE else dayStartOf(it.dueDate) },
         { -it.priority },
+        { if (it.dueDate == 0L) Long.MAX_VALUE else dayStartOf(it.dueDate) },
         { it.dueDate }
     )
-    // تب 0 (امروز): شامل کارهای امروز و کارهای عقب‌افتاده‌ی قبلی که انجام نشده‌اند
+    // تب 0 (امروز): شامل کارهای امروز، عقب‌افتاده‌ها و کارهای جاریِ بدون تاریخ آینده
     val base = when (tab) {
-        0 -> open.filter { it.dueDate > 0 && it.dueDate < todayEnd }.sortedWith(order)
+        0 -> open.filter { it.dueDate < todayEnd }.sortedWith(order)
         1 -> open.filter { it.dueDate >= todayEnd }.sortedWith(order)
         2 -> open.sortedWith(order)
         else -> todos.filter { it.done }.sortedByDescending { it.doneAt }
@@ -94,8 +95,8 @@ fun TasksScreen(vm: MainVm) {
     val shown = if (cat.isBlank()) base else base.filter { it.category == cat }
     val cats = todos.map { it.category }.filter { it.isNotBlank() }.distinct()
 
-    val todayRemaining = open.count { it.dueDate > 0 && it.dueDate < todayEnd }
-    val doneToday = todos.count { it.doneAt >= dayStart }
+    val todayRemaining = open.count { it.dueDate < todayEnd }
+    val doneToday = todos.count { it.done && (it.doneAt >= dayStart || it.doneAt == 0L) }
     val frac = if (doneToday + todayRemaining == 0) 0f
     else doneToday.toFloat() / (doneToday + todayRemaining)
     val counts = listOf(
@@ -105,7 +106,7 @@ fun TasksScreen(vm: MainVm) {
         todos.count { it.done }
     )
     val emptyText = when (tab) {
-        0 -> "برای امروز و عقب‌افتاده‌ها کاری نداری 🎉"
+        0 -> "برای امروز کاری نداری 🎉"
         1 -> "کار پیش‌رویی نداری"
         2 -> "کاری ثبت نشده"
         else -> "هنوز کاری انجام نشده"
@@ -161,7 +162,7 @@ fun TasksScreen(vm: MainVm) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = quick, onValueChange = { quick = it },
-                        label = { Text("افزودن سریع") }, singleLine = true,
+                        label = { Text("افزودن سریع کار...") }, singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
                     Spacer(Modifier.width(8.dp))
@@ -191,7 +192,12 @@ fun TasksScreen(vm: MainVm) {
                 }
             }
             items(shown, key = { it.id }) { t ->
-                TodoCard(t, onToggle = { vm.toggleTodo(t) }, onOpen = { editing = t })
+                TodoCard(
+                    t = t,
+                    onToggle = { vm.toggleTodo(t) },
+                    onOpen = { editing = t },
+                    onDelete = { vm.deleteTodo(t) }
+                )
             }
         }
         ExtendedFloatingActionButton(
@@ -207,6 +213,7 @@ fun TasksScreen(vm: MainVm) {
     if (creating) {
         TodoDialog(
             base = null,
+            defaultToday = tab == 0,
             onDismiss = { creating = false },
             onSave = { vm.saveTodo(it); creating = false },
             onDelete = null
@@ -215,6 +222,7 @@ fun TasksScreen(vm: MainVm) {
     editing?.let { t ->
         TodoDialog(
             base = t,
+            defaultToday = false,
             onDismiss = { editing = null },
             onSave = { vm.saveTodo(it); editing = null },
             onDelete = { vm.deleteTodo(t); editing = null }
@@ -223,7 +231,7 @@ fun TasksScreen(vm: MainVm) {
 }
 
 @Composable
-fun TodoCard(t: Todo, onToggle: () -> Unit, onOpen: () -> Unit) {
+fun TodoCard(t: Todo, onToggle: () -> Unit, onOpen: () -> Unit, onDelete: () -> Unit) {
     val subs = parseSubs(t.subs)
     val overdue = !t.done && t.dueDate > 0 &&
         (if (t.hasTime) t.dueDate < System.currentTimeMillis() else daysUntil(t.dueDate) < 0)
@@ -250,6 +258,14 @@ fun TodoCard(t: Todo, onToggle: () -> Unit, onOpen: () -> Unit) {
                     color = if (t.done) MaterialTheme.colorScheme.onSurfaceVariant
                     else MaterialTheme.colorScheme.onSurface
                 )
+                if (t.note.isNotBlank()) {
+                    Text(
+                        t.note,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 if (parts.isNotEmpty()) {
                     Text(
                         parts.joinToString(" · "),
@@ -267,14 +283,17 @@ fun TodoCard(t: Todo, onToggle: () -> Unit, onOpen: () -> Unit) {
                     color = priorityColor(t.priority)
                 )
             }
-            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = onDelete) { Text("✕") }
         }
     }
 }
 
+// ---------- فرم ساخت و ویرایش کار ----------
+
 @Composable
 fun TodoDialog(
     base: Todo?,
+    defaultToday: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (Todo) -> Unit,
     onDelete: (() -> Unit)?
@@ -282,7 +301,13 @@ fun TodoDialog(
     var title by remember { mutableStateOf(base?.title ?: "") }
     var note by remember { mutableStateOf(base?.note ?: "") }
     var dateText by remember {
-        mutableStateOf(if (base != null && base.dueDate > 0) jalaliText(base.dueDate) else "")
+        mutableStateOf(
+            when {
+                base != null && base.dueDate > 0 -> jalaliText(base.dueDate)
+                base == null && defaultToday -> todayJalali()
+                else -> ""
+            }
+        )
     }
     var timeText by remember {
         mutableStateOf(if (base != null && base.hasTime) clockText(base.dueDate) else "")
@@ -340,7 +365,8 @@ fun TodoDialog(
                         label = { Text("بدون تاریخ") }
                     )
                     FilterChip(
-                        selected = false, onClick = { setDate(System.currentTimeMillis()) },
+                        selected = dateText == todayJalali(),
+                        onClick = { setDate(System.currentTimeMillis()) },
                         label = { Text("امروز") }
                     )
                     FilterChip(
