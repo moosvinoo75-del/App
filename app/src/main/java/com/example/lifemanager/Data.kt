@@ -39,7 +39,11 @@ data class Food(
     val name: String,
     val grams: Int,
     val kcal: Int,
-    val date: Long
+    val date: Long,
+    @ColumnInfo(defaultValue = "0") val protein: Float = 0f,
+    @ColumnInfo(defaultValue = "0") val carbs: Float = 0f,
+    @ColumnInfo(defaultValue = "0") val fat: Float = 0f,
+    @ColumnInfo(defaultValue = "میان‌وعده") val mealType: String = "میان‌وعده"
 )
 
 @Entity(tableName = "accounts")
@@ -263,14 +267,33 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
     }
 }
 
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `foods` ADD COLUMN `protein` REAL NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `foods` ADD COLUMN `carbs` REAL NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `foods` ADD COLUMN `fat` REAL NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `foods` ADD COLUMN `mealType` TEXT NOT NULL DEFAULT 'میان‌وعده'")
+    }
+}
+
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `project_expenses` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`projectName` TEXT NOT NULL, `category` TEXT NOT NULL, `amount` INTEGER NOT NULL, " +
+                "`date` INTEGER NOT NULL, `note` TEXT NOT NULL)"
+        )
+    }
+}
+
 @Database(
     entities = [
         Txn::class, TaskItem::class, Food::class, Account::class,
         Budget::class, Goal::class, Snapshot::class,
         Cheque::class, Loan::class, PersonDebt::class, Recurring::class, Transfer::class,
-        Todo::class
+        Todo::class, ProjectExpense::class
     ],
-    version = 8,
+    version = 10,
     exportSchema = false
 )
 abstract class AppDb : RoomDatabase() {
@@ -286,7 +309,8 @@ abstract class AppDb : RoomDatabase() {
     abstract fun personDebtDao(): PersonDebtDao
     abstract fun recurringDao(): RecurringDao
     abstract fun transferDao(): TransferDao
-    abstract fun todoDao(): TodoDao // <--- این خط اضافه شد
+    abstract fun todoDao(): TodoDao
+    abstract fun projectExpenseDao(): ProjectExpenseDao
 
     companion object {
         @Volatile private var inst: AppDb? = null
@@ -294,14 +318,13 @@ abstract class AppDb : RoomDatabase() {
             inst ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "life.db")
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
-                    MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
+                    MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
+                    MIGRATION_8_9, MIGRATION_9_10
                 )
                 .build().also { inst = it }
         }
     }
 }
-
-// ---------- ViewModel ----------
 
 class MainVm(app: Application) : AndroidViewModel(app) {
     val db = AppDb.get(app)
@@ -317,6 +340,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val people = db.personDebtDao().all()
     val recurring = db.recurringDao().all()
     val transfers = db.transferDao().all()
+    val projectExpenses = db.projectExpenseDao().all()
 
     init {
         viewModelScope.launch {
@@ -450,6 +474,8 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             c.put(
                 JSONObject().put("name", it.name).put("grams", it.grams)
                     .put("kcal", it.kcal).put("date", it.date)
+                    .put("protein", it.protein).put("carbs", it.carbs).put("fat", it.fat)
+                    .put("mealType", it.mealType)
             )
         }
         o.put("foods", c)
@@ -474,6 +500,14 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             )
         }
         o.put("goals", g)
+        val pe = JSONArray()
+        db.projectExpenseDao().list().forEach {
+            pe.put(
+                JSONObject().put("projectName", it.projectName).put("category", it.category)
+                    .put("amount", it.amount).put("date", it.date).put("note", it.note)
+            )
+        }
+        o.put("project_expenses", pe)
         db.putAllExtra(o)
         return o.toString(2)
     }
@@ -499,12 +533,15 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             val j = c.getJSONObject(i)
             Food(
                 name = j.getString("name"), grams = j.optInt("grams"),
-                kcal = j.getInt("kcal"), date = j.getLong("date")
+                kcal = j.getInt("kcal"), date = j.getLong("date"),
+                protein = j.optDouble("protein", 0.0).toFloat(),
+                carbs = j.optDouble("carbs", 0.0).toFloat(),
+                fat = j.optDouble("fat", 0.0).toFloat(),
+                mealType = j.optString("mealType", "میان‌وعده")
             )
         }
         val d = o.optJSONArray("accounts") ?: JSONArray()
         val accounts = (0 until d.length()).map { i ->
-            val j = c.getJSONObject(i) // wait, keep correct index if needed, or use j
             val accJson = d.getJSONObject(i)
             Account(
                 id = accJson.optLong("id", 0), name = accJson.getString("name"),
@@ -522,6 +559,17 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             val j = g.getJSONObject(i)
             Goal(name = j.getString("name"), target = j.getLong("target"), saved = j.getLong("saved"))
         }
+        val pe = o.optJSONArray("project_expenses") ?: JSONArray()
+        val pExpenses = (0 until pe.length()).map { i ->
+            val j = pe.getJSONObject(i)
+            ProjectExpense(
+                projectName = j.getString("projectName"),
+                category = j.optString("category"),
+                amount = j.getLong("amount"),
+                date = j.getLong("date"),
+                note = j.optString("note")
+            )
+        }
         db.withTransaction {
             db.txnDao().clear()
             db.taskDao().clear()
@@ -529,12 +577,14 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             db.accountDao().clear()
             db.budgetDao().clear()
             db.goalDao().clear()
+            db.projectExpenseDao().clear()
             db.accountDao().insertAll(accounts)
             db.txnDao().insertAll(txns)
             db.taskDao().insertAll(tasks)
             db.foodDao().insertAll(foods)
             db.budgetDao().insertAll(budgets)
             db.goalDao().insertAll(goals)
+            db.projectExpenseDao().insertAll(pExpenses)
             db.restoreAll(o)
         }
     }
