@@ -57,6 +57,9 @@ fun MainVm.delProjectExpense(item: ProjectExpense) = viewModelScope.launch {
     db.projectExpenseDao().delete(item)
 }
 
+private fun parseProjectAmount(s: String): Long? =
+    digits(s).replace(",", "").replace("٬", "").replace(" ", "").trim().toLongOrNull()
+
 val DEFAULT_PROJECTS = listOf("ساخت خانه", "ماه‌های گذشته", "تعمیرات و بازسازی")
 val PROJECT_CATEGORIES = listOf(
     "مصالح ساختمانی", "دستمزد استادکار و کارگر", "تأسیسات و لوله‌کشی",
@@ -358,11 +361,11 @@ fun ProjectExpenseDialog(
         },
         confirmButton = {
             Button(onClick = {
-                val amt = parseAmount(amountText)
+                val amt = parseProjectAmount(amountText)
                 val dt = parseJalali(dateText)
                 when {
                     projectName.isBlank() -> err = "نام پروژه را وارد کن"
-                    amt == null || amt <= 0 -> err = "مبلغ معتبر نیست"
+                    amt == null || amt <= 0L -> err = "مبلغ معتبر نیست"
                     dt == null -> err = "تاریخ شمسی معتبر نیست (نمونه: 1405/02/10)"
                     else -> onSave(
                         ProjectExpense(
