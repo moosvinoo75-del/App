@@ -9,12 +9,12 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 object AiHub {
-    val PROVIDERS = listOf("claude", "gemini", "grok")
+    val PROVIDERS = listOf("gemini", "claude", "grok")
 
     val FOOD_PROMPT = """
-کاربر لیست غذاهایی که خورده را می‌نویسد. کالری هر مورد را تخمین بزن.
-فقط و فقط یک آرایه JSON برگردان، بدون هیچ متن دیگر، با این قالب:
-[{"name":"نام غذا","grams":عدد,"kcal":عدد}]
+کاربر لیست غذاهایی که خورده را می‌نویسد. کالری و وزن تقریبی هر مورد را به گرم تخمین بزن.
+فقط و فقط یک آرایه JSON معتبر برگردان، بدون هیچ توضیح اضافه یا مارک‌داون، با این قالب:
+[{"name":"نام غذا","grams":100,"kcal":250}]
 """.trimIndent()
 
     private const val UA = "LifeManager/1.0"
@@ -26,14 +26,14 @@ object AiHub {
     }
 
     fun defaultModel(p: String): String = when (p) {
-        "claude" -> "claude-sonnet-5-5"
-        "gemini" -> "gemini-flash-latest"
-        else -> "grok-4"
+        "claude" -> "claude-sonnet-4-5"
+        "gemini" -> "gemini-2.5-flash"
+        else -> "grok-3"
     }
 
     fun keyHint(p: String): String = when (p) {
         "claude" -> "کلید را از console.anthropic.com بگیر."
-        "gemini" -> "کلید را از aistudio.google.com (Get API key) بگیر."
+        "gemini" -> "کلید را از aistudio.google.com (بخش Get API key) بگیر."
         else -> "کلید را از console.x.ai بگیر."
     }
 
@@ -41,7 +41,7 @@ object AiHub {
 
     private fun sp(c: Context) = c.getSharedPreferences("ai_settings", Context.MODE_PRIVATE)
 
-    fun provider(c: Context): String = sp(c).getString("provider", "claude") ?: "claude"
+    fun provider(c: Context): String = sp(c).getString("provider", "gemini") ?: "gemini"
 
     fun setProvider(c: Context, p: String) {
         sp(c).edit().putString("provider", p).apply()
@@ -50,7 +50,6 @@ object AiHub {
     fun key(c: Context, p: String): String {
         val v = sp(c).getString("key_$p", "") ?: ""
         if (v.isNotBlank()) return v
-        // کلید Claude که قبلاً در نسخه‌های قبلی ذخیره شده
         if (p == "claude") {
             return c.getSharedPreferences("settings", Context.MODE_PRIVATE).getString("key", "") ?: ""
         }
@@ -62,8 +61,10 @@ object AiHub {
     }
 
     fun model(c: Context, p: String): String {
-        val m = sp(c).getString("model_$p", "") ?: ""
-        return if (m.isBlank()) defaultModel(p) else m
+        val m = (sp(c).getString("model_$p", "") ?: "").trim()
+        // اصلاح خودکار نام مدل نامعتبر قبلی
+        if (m.isBlank() || m == "claude-sonnet-5-5") return defaultModel(p)
+        return m
     }
 
     fun setModel(c: Context, p: String, v: String) {
@@ -72,7 +73,41 @@ object AiHub {
 
     fun isReady(c: Context): Boolean = key(c, provider(c)).isNotBlank()
 
+    // استخراج ایمن آرایه غذاها از پاسخ متنی هوش مصنوعی
+    fun parseFoodJson(raw: String, dateMs: Long = System.currentTimeMillis()): List<Food> {
+        val start = raw.indexOf('[')
+        val end = raw.lastIndexOf(']')
+        if (start < 0 || end <= start) throw Exception("قالب پاسخ هوش مصنوعی معتبر نبود")
+        val arr = JSONArray(raw.substring(start, end + 1))
+        val out = mutableListOf<Food>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val name = o.optString("name").trim()
+            val grams = o.optInt("grams", 0)
+            val kcal = o.optDouble("kcal", 0.0).toInt()
+            if (name.isNotEmpty() && kcal >= 0) {
+                out.add(Food(name = name, grams = grams, kcal = kcal, date = dateMs))
+            }
+        }
+        return out
+    }
+
     // ---------- ارتباط با سرور ----------
+
+    private fun extractErrorMessage(code: Int, text: String): String {
+        try {
+            val obj = JSONObject(text)
+            val err = obj.opt("error")
+            if (err is JSONObject) {
+                val msg = err.optString("message")
+                if (msg.isNotBlank()) return "کد $code: $msg"
+            } else if (err is String && err.isNotBlank()) {
+                return "کد $code: $err"
+            }
+        } catch (_: Exception) {
+        }
+        return "کد $code: ${text.take(250)}"
+    }
 
     private suspend fun http(
         method: String, url: String, headers: Map<String, String>, body: String?
@@ -86,12 +121,12 @@ object AiHub {
             for ((k, v) in headers) conn.setRequestProperty(k, v)
             if (body != null) {
                 conn.doOutput = true
-                conn.outputStream.use { it.write(body.toByteArray()) }
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             }
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
-            if (code !in 200..299) throw Exception("کد $code: ${text.take(300)}")
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            if (code !in 200..299) throw Exception(extractErrorMessage(code, text))
             text
         } finally {
             conn.disconnect()
@@ -103,7 +138,7 @@ object AiHub {
         val p = provider(c)
         val k = key(c, p)
         if (k.isBlank()) throw Exception("کلید API ${label(p)} وارد نشده است")
-        val m = model(c, p).removePrefix("models/")
+        val m = model(c, p).removePrefix("models/").trim()
         return when (p) {
             "gemini" -> askGemini(k, m, system, user)
             "grok" -> askGrok(k, m, system, user)
@@ -129,28 +164,30 @@ object AiHub {
             ),
             body.toString()
         )
-        val arr = JSONObject(text).getJSONArray("content")
+        val arr = JSONObject(text).optJSONArray("content") ?: JSONArray()
         val sb = StringBuilder()
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
-            if (o.optString("type") == "text") sb.append(o.getString("text"))
+            if (o.optString("type") == "text") sb.append(o.optString("text"))
         }
-        return sb.toString()
+        return sb.toString().trim()
     }
 
     private suspend fun askGemini(k: String, model: String, system: String, user: String): String {
         val body = JSONObject()
-            .put(
+        if (system.isNotBlank()) {
+            body.put(
                 "systemInstruction",
                 JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system)))
             )
-            .put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().put("role", "user")
-                        .put("parts", JSONArray().put(JSONObject().put("text", user)))
-                )
+        }
+        body.put(
+            "contents",
+            JSONArray().put(
+                JSONObject().put("role", "user")
+                    .put("parts", JSONArray().put(JSONObject().put("text", user)))
             )
+        )
         val text = http(
             "POST", "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent",
             mapOf("content-type" to "application/json", "x-goog-api-key" to k),
@@ -165,7 +202,7 @@ object AiHub {
             val o = parts.getJSONObject(i)
             if (!o.optBoolean("thought", false)) sb.append(o.optString("text"))
         }
-        return sb.toString()
+        return sb.toString().trim()
     }
 
     private suspend fun askGrok(k: String, model: String, system: String, user: String): String {
@@ -180,7 +217,7 @@ object AiHub {
         )
         val choices = JSONObject(text).optJSONArray("choices")
         if (choices == null || choices.length() == 0) throw Exception("پاسخی دریافت نشد: ${text.take(200)}")
-        return choices.getJSONObject(0).getJSONObject("message").optString("content")
+        return choices.getJSONObject(0).getJSONObject("message").optString("content").trim()
     }
 
     // فهرست مدل‌های قابل استفاده با کلید ذخیره‌شده
