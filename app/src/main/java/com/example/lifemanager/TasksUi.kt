@@ -58,43 +58,10 @@ fun CountTabs(labels: List<String>, counts: List<Int>, selected: Int, onSelect: 
     }
 }
 
-// ---------- صفحه‌ی برنامه‌ریزی (کارها + پروژه‌ها و ساخت‌وساز) ----------
+// ---------- صفحه‌ی کارها ----------
 
 @Composable
 fun TasksScreen(vm: MainVm) {
-    var mode by remember { mutableIntStateOf(0) } // 0 = کارهای روزمره، 1 = پروژه‌ها و ساخت‌وساز
-    val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-
-    Column(Modifier.fillMaxSize().padding(top = top + 8.dp)) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(
-                selected = mode == 0,
-                onClick = { mode = 0 },
-                label = { Text("✅ کارهای روزمره") },
-                modifier = Modifier.weight(1f)
-            )
-            FilterChip(
-                selected = mode == 1,
-                onClick = { mode = 1 },
-                label = { Text("🏗 پروژه‌ها و ساخت‌وساز") },
-                modifier = Modifier.weight(1f)
-            )
-        }
-        Spacer(Modifier.height(4.dp))
-
-        if (mode == 0) {
-            TodoSection(vm)
-        } else {
-            ProjectExpensesScreen(vm)
-        }
-    }
-}
-
-@Composable
-fun TodoSection(vm: MainVm) {
     val ctx = LocalContext.current
     val flow = remember(vm) { vm.db.todoDao().all() }
     val todos by flow.collectAsState(initial = emptyList())
@@ -142,11 +109,12 @@ fun TodoSection(vm: MainVm) {
         2 -> "کاری ثبت نشده"
         else -> "هنوز کاری انجام نشده"
     }
+    val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             Modifier.fillMaxSize().padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(top = 4.dp, bottom = 88.dp),
+            contentPadding = PaddingValues(top = top + 8.dp, bottom = 88.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             item {
@@ -317,8 +285,6 @@ fun TodoCard(t: Todo, onToggle: () -> Unit, onOpen: () -> Unit, onDelete: () -> 
         }
     }
 }
-
-// ---------- فرم ساخت و ویرایش کار ----------
 
 @Composable
 fun TodoDialog(
