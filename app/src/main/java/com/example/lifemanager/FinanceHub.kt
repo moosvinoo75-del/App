@@ -62,6 +62,7 @@ fun FinanceHub(vm: MainVm) {
         "cheques" to "چک و قسط",
         "people" to "طلب و بدهی افراد",
         "recurring" to "تکراری و اشتراک",
+        "projects" to "ساخت‌وساز و خرج‌های گذشته",
         "tools" to "انتقال و خروجی"
     )
 
@@ -80,6 +81,7 @@ fun FinanceHub(vm: MainVm) {
                     "cheques" -> ChequeLoanScreen(vm)
                     "people" -> PeopleScreen(vm)
                     "recurring" -> RecurringScreen(vm)
+                    "projects" -> ProjectExpensesScreen(vm)
                     else -> ToolsScreen(vm)
                 }
             }
@@ -233,10 +235,12 @@ fun PlanPage(vm: MainVm, go: (String) -> Unit) {
     val loans by vm.loans.collectAsState(initial = emptyList())
     val people by vm.people.collectAsState(initial = emptyList())
     val recurring by vm.recurring.collectAsState(initial = emptyList())
+    val projects by vm.projectExpenses.collectAsState(initial = emptyList())
 
     val dueCount = dueCountOf(cheques, loans)
     val openPeople = people.count { it.paid < it.amount }
     val fixedMonthly = recurring.filter { it.active && !it.isIncome }.sumOf { it.amount }
+    val projectTotal = projects.sumOf { it.amount }
 
     val tiles = listOf(
         Tile("budget", "🎯", "بودجه", if (budgets.isEmpty()) "سقف خرج هر دسته" else "${budgets.size} دسته"),
@@ -246,6 +250,10 @@ fun PlanPage(vm: MainVm, go: (String) -> Unit) {
         Tile(
             "recurring", "🔁", "تکراری و اشتراک",
             if (fixedMonthly > 0) "ماهانه ${shortAmount(fixedMonthly)}" else "اجاره، قسط، اینترنت"
+        ),
+        Tile(
+            "projects", "🏗", "ساخت‌وساز و گذشته",
+            if (projectTotal > 0) "مجموع: ${shortAmount(projectTotal)}" else "ساخت خانه · خرج‌های قبل"
         ),
         Tile("tools", "🔀", "انتقال و خروجی", "بین حساب‌ها · اکسل")
     )
@@ -257,6 +265,7 @@ fun PlanPage(vm: MainVm, go: (String) -> Unit) {
         tiles.chunked(2).forEach { row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 row.forEach { t -> TileCard(t, Modifier.weight(1f)) { go(t.key) } }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
             }
         }
         SectionCard("اندازه‌ی نوشته‌ها") {
