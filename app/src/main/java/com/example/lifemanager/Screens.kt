@@ -28,10 +28,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 // ---------- تغذیه ----------
 
@@ -92,28 +88,42 @@ fun FoodScreen(vm: MainVm) {
                             busy = true
                             msg = ""
                             scope.launch {
+                                val input = text
                                 try {
-                                    if (AiHub.isReady(ctx)) {
-                                        val out = AiHub.ask(ctx, AiHub.FOOD_PROMPT, text)
-                                        val arr = JSONArray(out.substring(out.indexOf('['), out.lastIndexOf(']') + 1))
-                                        val now = System.currentTimeMillis()
-                                        val foods = (0 until arr.length()).map { i ->
-                                            val o = arr.getJSONObject(i)
-                                            Food(
-                                                name = o.getString("name"), grams = o.optInt("grams", 0),
-                                                kcal = o.getDouble("kcal").toInt(), date = now
-                                            )
+                                    // ابتدا بررسی با بانک اطلاعاتی جامع داخلی
+                                    val (localFoods, missing) = LocalFood.estimate(input)
+                                    if (missing.isEmpty() && localFoods.isNotEmpty()) {
+                                        vm.addFoods(localFoods)
+                                        text = ""
+                                    } else if (AiHub.isReady(ctx)) {
+                                        try {
+                                            val out = AiHub.ask(ctx, AiHub.FOOD_PROMPT, input)
+                                            val aiFoods = AiHub.parseFoodJson(out)
+                                            if (aiFoods.isNotEmpty()) {
+                                                vm.addFoods(aiFoods)
+                                                text = ""
+                                            } else if (localFoods.isNotEmpty()) {
+                                                vm.addFoods(localFoods)
+                                                text = ""
+                                            }
+                                        } catch (aiErr: Exception) {
+                                            // در صورت قطع اینترنت یا خطای API، موارد پیدا شده در بانک داخلی ثبت می‌شوند
+                                            if (localFoods.isNotEmpty()) {
+                                                vm.addFoods(localFoods)
+                                                text = ""
+                                                msg = "هوش مصنوعی در دسترس نبود؛ موارد شناخته‌شده با بانک داخلی ثبت شد."
+                                            } else {
+                                                msg = "خطای هوش مصنوعی: ${aiErr.message}"
+                                            }
                                         }
-                                        vm.addFoods(foods)
                                     } else {
-                                        val (foods, missing) = LocalFood.estimate(text)
-                                        vm.addFoods(foods)
+                                        vm.addFoods(localFoods)
+                                        text = ""
                                         if (missing.isNotEmpty()) {
                                             msg = "کالری این‌ها پیدا نشد: " + missing.joinToString("، ") +
                                                 " — از دکمه‌ی «بانک غذاها» انتخاب کن یا کلید API را در تب «بیشتر» بگذار."
                                         }
                                     }
-                                    text = ""
                                 } catch (e: Exception) {
                                     msg = "خطا: ${e.message}"
                                 }
@@ -336,66 +346,208 @@ fun FoodScreen(vm: MainVm) {
 fun AssistantScreen(vm: MainVm) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+
     val txns by vm.txns.collectAsState(initial = emptyList())
-    val tasks by vm.tasks.collectAsState(initial = emptyList())
+    val accounts by vm.accounts.collectAsState(initial = emptyList())
+    val budgets by vm.budgets.collectAsState(initial = emptyList())
+    val goals by vm.goals.collectAsState(initial = emptyList())
+    val cheques by vm.cheques.collectAsState(initial = emptyList())
+    val loans by vm.loans.collectAsState(initial = emptyList())
+    val people by vm.people.collectAsState(initial = emptyList())
+    val todosFlow = remember(vm) { vm.db.todoDao().all() }
+    val todos by todosFlow.collectAsState(initial = emptyList())
     val foods by vm.todayFoods.collectAsState(initial = emptyList())
+
     var prov by remember { mutableStateOf(AiHub.provider(ctx)) }
     var q by remember { mutableStateOf("") }
-    var answer by remember { mutableStateOf("") }
+    var history by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var errorMsg by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+
+    fun sendQuestion(question: String) {
+        val cleanQ = question.trim()
+        if (cleanQ.isBlank() || busy) return
+        if (AiHub.key(ctx, prov).isBlank()) {
+            errorMsg = "اول کلید API ${AiHub.label(prov)} را در تب «بیشتر» وارد و ذخیره کن."
+            return
+        }
+        busy = true
+        errorMsg = ""
+        scope.launch {
+            try {
+                val ym = currentYM()
+                val curMonthTxns = monthTxns(txns, ym)
+                val monthInc = curMonthTxns.filter { it.isIncome }.sumOf { it.amount }
+                val monthExp = curMonthTxns.filter { !it.isIncome }.sumOf { it.amount }
+                val wealth = computeWealth(accounts)
+
+                val data = buildString {
+                    append("تاریخ امروز (شمسی): ${todayJalali()} (${ym.label()})\n")
+                    append("ثروت خالص کل: ${fmt(wealth.net)} تومان (دارایی‌ها: ${fmt(wealth.assets)}، بدهی‌ها: ${fmt(wealth.debts)})\n")
+                    append("خلاصه ماه جاری (${ym.label()}): درآمد ${fmt(monthInc)} تومان، هزینه ${fmt(monthExp)} تومان\n\n")
+
+                    if (accounts.isNotEmpty()) {
+                        append("حساب‌ها و دارایی‌ها:\n")
+                        accounts.forEach { a ->
+                            append("- ${a.name} (${a.type}): ${fmt(a.value())} تومان\n")
+                        }
+                        append("\n")
+                    }
+
+                    if (budgets.isNotEmpty()) {
+                        val spentMap = categoryTotals(curMonthTxns).toMap()
+                        append("بودجه‌های این ماه:\n")
+                        budgets.forEach { b ->
+                            append("- ${b.category}: خرج‌شده ${fmt(spentMap[b.category] ?: 0L)} از سقف ${fmt(b.limitAmount)} تومان\n")
+                        }
+                        append("\n")
+                    }
+
+                    if (goals.isNotEmpty()) {
+                        append("اهداف پس‌انداز:\n")
+                        goals.forEach { g ->
+                            append("- ${g.name}: ${fmt(g.saved)} از ${fmt(g.target)} تومان\n")
+                        }
+                        append("\n")
+                    }
+
+                    val pendingCheques = cheques.filter { it.status == 0 }
+                    if (pendingCheques.isNotEmpty()) {
+                        append("چک‌های در انتظار:\n")
+                        pendingCheques.forEach { c ->
+                            append("- ${if (c.issued) "صادره به" else "دریافتی از"} ${c.party}: ${fmt(c.amount)} تومان، سررسید ${jalaliText(c.dueDate)} (${dueText(daysUntil(c.dueDate))})\n")
+                        }
+                        append("\n")
+                    }
+
+                    val activeLoans = loans.filter { it.paid < it.totalCount }
+                    if (activeLoans.isNotEmpty()) {
+                        append("وام‌ها و اقساط فعال:\n")
+                        activeLoans.forEach { l ->
+                            val due = loanDue(l)
+                            append("- ${l.title}: هر قسط ${fmt(l.installment)} تومان (${l.paid} از ${l.totalCount} پرداخت شده)" +
+                                (if (due != null) "، قسط بعدی: ${jalaliText(due)}" else "") + "\n")
+                        }
+                        append("\n")
+                    }
+
+                    val openPeople = people.filter { it.paid < it.amount }
+                    if (openPeople.isNotEmpty()) {
+                        append("طلب و بدهی اشخاص:\n")
+                        openPeople.forEach { p ->
+                            append("- ${p.person}: ${fmt(p.amount - p.paid)} تومان (${if (p.owedToMe) "طلب من" else "بدهی من"})\n")
+                        }
+                        append("\n")
+                    }
+
+                    append("تراکنش‌های اخیر (حداکثر ۸۰ مورد):\n")
+                    txns.take(80).forEach {
+                        append("- ${jalaliText(it.date)} | ${if (it.isIncome) "درآمد" else "هزینه"} | ${fmt(it.amount)} تومان | دسته: ${it.category.ifBlank { "بدون دسته" }} | توضیح: ${it.note}\n")
+                    }
+
+                    append("\nکارها (Todos):\n")
+                    todos.take(50).forEach { t ->
+                        val dueStr = if (t.dueDate > 0) " (موعد: ${jalaliText(t.dueDate)})" else ""
+                        append("- ${if (t.done) "[انجام شد]" else "[مانده]"} ${t.title}$dueStr ${if (t.category.isNotBlank()) "[${t.category}]" else ""}\n")
+                    }
+
+                    append("\nتغذیه امروز (مجموع کالری: ${foods.sumOf { it.kcal }} kcal):\n")
+                    foods.forEach { f ->
+                        append("- ${f.name} (${f.grams} گرم): ${f.kcal} کالری\n")
+                    }
+                }
+
+                val system = "تو دستیار هوشمند و مشاور شخصی مالی، برنامه‌ریزی و تغذیه‌ی فارسی‌زبان در اپلیکیشن «مدیریت زندگی» هستی. " +
+                    "بر اساس داده‌های واقعی کاربر که در ادامه آمده، دقیق، صمیمی، کاربردی و مرتب به فارسی پاسخ بده. مبالغ به تومان و تاریخ‌ها به شمسی هستند.\n\n$data"
+
+                val ans = AiHub.ask(ctx, system, cleanQ)
+                history = listOf(cleanQ to ans) + history
+                q = ""
+            } catch (e: Exception) {
+                errorMsg = "خطا: ${e.message}"
+            }
+            busy = false
+        }
+    }
+
+    val quickPrompts = listOf(
+        "وضعیت مالی و خرج‌های این ماهم رو تحلیل کن",
+        "چه کارهایی برای امروز یا عقب‌افتاده دارم؟",
+        "چک‌ها، اقساط و بدهی‌های پیش‌رو چیا هستن؟",
+        "کالری و تغذیه امروز من چطور بوده؟"
+    )
 
     Column(
         Modifier.fillMaxSize().statusBarsPadding().padding(16.dp).verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Text("پاسخ‌دهنده", style = MaterialTheme.typography.bodySmall)
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("دستیار هوشمند", style = MaterialTheme.typography.titleLarge)
+            if (history.isNotEmpty()) {
+                TextButton(onClick = { history = emptyList() }) { Text("پاک‌کردن صفحه") }
+            }
+        }
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AiHub.PROVIDERS.forEach { p ->
                 FilterChip(
                     selected = prov == p,
-                    onClick = { prov = p; AiHub.setProvider(ctx, p) },
+                    onClick = { prov = p; AiHub.setProvider(ctx, p); errorMsg = "" },
                     label = { Text(AiHub.label(p)) }
                 )
             }
         }
+
+        Text("پرسش‌های سریع:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            quickPrompts.forEach { prompt ->
+                AssistChip(
+                    enabled = !busy,
+                    onClick = { q = prompt; sendQuestion(prompt) },
+                    label = { Text(prompt) }
+                )
+            }
+        }
+
         OutlinedTextField(
             value = q, onValueChange = { q = it },
-            label = { Text("سؤالت را بنویس") },
+            label = { Text("سؤالت را در مورد مالی، کارها یا تغذیه بنویس...") },
             minLines = 2, modifier = Modifier.fillMaxWidth()
         )
-        Button(enabled = !busy, onClick = {
-            if (AiHub.key(ctx, prov).isBlank()) {
-                answer = "اول کلید API ${AiHub.label(prov)} را در تب «بیشتر» وارد کن."
-            } else if (q.isNotBlank()) {
-                busy = true
-                scope.launch {
-                    try {
-                        val df = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-                        val data = buildString {
-                            append("امروز: ${df.format(Date())}\n\nتراکنش‌ها (حداکثر ۱۰۰ مورد اخیر):\n")
-                            txns.take(100).forEach {
-                                append("${df.format(Date(it.date))} ${if (it.isIncome) "درآمد" else "هزینه"} ${it.amount} ${it.category} ${it.note}\n")
-                            }
-                            append("\nکارها:\n")
-                            tasks.forEach { append("${if (it.done) "[انجام شد]" else "[مانده]"} ${it.title}\n") }
-                            append("\nکالری امروز: ${foods.sumOf { it.kcal }}\n")
-                        }
-                        val system = "تو دستیار شخصی فارسی‌زبان هستی. فقط بر اساس داده‌های زیر جواب بده، کوتاه و دقیق.\n\n$data"
-                        answer = AiHub.ask(ctx, system, q)
-                    } catch (e: Exception) {
-                        answer = "خطا: ${e.message}"
-                    }
-                    busy = false
+        Button(
+            enabled = !busy && q.isNotBlank(),
+            onClick = { sendQuestion(q) },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (busy) "در حال تحلیل و نوشتن پاسخ..." else "بپرس")
+        }
+
+        if (errorMsg.isNotBlank()) {
+            Card(Modifier.fillMaxWidth()) {
+                Text(errorMsg, Modifier.padding(12.dp), color = ExpenseColor)
+            }
+        }
+
+        history.forEach { (question, answer) ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "پرسش: $question",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    HorizontalDivider()
+                    Text(answer, style = MaterialTheme.typography.bodyMedium)
                 }
             }
-        }) { Text(if (busy) "در حال فکر کردن..." else "بپرس") }
-        if (answer.isNotBlank()) {
-            Card(Modifier.fillMaxWidth()) { Text(answer, Modifier.padding(16.dp)) }
         }
-        Text(
-            "نمونه: «این ماه چقدر خرج خوراک کردم؟» یا «چه کارهایی مانده؟»",
-            style = MaterialTheme.typography.bodySmall
-        )
     }
 }
 
@@ -551,7 +703,7 @@ fun MoreScreen(vm: MainVm) {
         )
         OutlinedTextField(
             value = modelText, onValueChange = { modelText = it },
-            label = { Text("نام مدل") }, singleLine = true,
+            label = { Text("نام مدل (مثلاً ${AiHub.defaultModel(prov)})") }, singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         Row(
@@ -584,7 +736,7 @@ fun MoreScreen(vm: MainVm) {
                     }
                     aiBusy = false
                 }
-            }) { Text(if (aiBusy) "صبر کن..." else "تست") }
+            }) { Text(if (aiBusy) "صبر کن..." else "تست اتصال") }
         }
 
         HorizontalDivider()
