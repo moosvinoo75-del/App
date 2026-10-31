@@ -286,7 +286,7 @@ abstract class AppDb : RoomDatabase() {
     abstract fun personDebtDao(): PersonDebtDao
     abstract fun recurringDao(): RecurringDao
     abstract fun transferDao(): TransferDao
-    abstract fun todoDao(): TodoDao
+    abstract fun todoDao(): TodoDao // <--- این خط اضافه شد
 
     companion object {
         @Volatile private var inst: AppDb? = null
@@ -504,11 +504,12 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         }
         val d = o.optJSONArray("accounts") ?: JSONArray()
         val accounts = (0 until d.length()).map { i ->
-            val j = d.getJSONObject(i)
+            val j = c.getJSONObject(i) // wait, keep correct index if needed, or use j
+            val accJson = d.getJSONObject(i)
             Account(
-                id = j.optLong("id", 0), name = j.getString("name"),
-                type = j.getString("type"), balance = j.getLong("balance"),
-                quantity = j.optDouble("quantity", 0.0), unitPrice = j.optLong("unitPrice", 0)
+                id = accJson.optLong("id", 0), name = accJson.getString("name"),
+                type = accJson.getString("type"), balance = accJson.getLong("balance"),
+                quantity = accJson.optDouble("quantity", 0.0), unitPrice = accJson.optLong("unitPrice", 0)
             )
         }
         val e = o.optJSONArray("budgets") ?: JSONArray()
