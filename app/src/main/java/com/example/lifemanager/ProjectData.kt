@@ -25,8 +25,8 @@ import kotlinx.coroutines.launch
 @Entity(tableName = "project_expenses")
 data class ProjectExpense(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val projectName: String, // مثلاً: ساخت خانه، ماه‌های گذشته، بازسازی
-    val category: String,    // مثلاً: مصالح، دستمزد، تأسیسات، مجوزها، عمومی
+    val projectName: String,
+    val category: String,
     val amount: Long,
     val date: Long,
     val note: String = ""
@@ -59,6 +59,23 @@ fun MainVm.delProjectExpense(item: ProjectExpense) = viewModelScope.launch {
 
 private fun parseProjectAmount(s: String): Long? =
     digits(s).replace(",", "").replace("٬", "").replace(" ", "").trim().toLongOrNull()
+
+// تبدیل عدد به نمایش خوانا: میلیارد، میلیون و هزار تومان
+fun amountInWords(n: Long): String {
+    if (n <= 0L) return ""
+    val parts = mutableListOf<String>()
+    val billions = n / 1_000_000_000L
+    val millions = (n % 1_000_000_000L) / 1_000_000L
+    val thousands = (n % 1_000_000L) / 1_000L
+    val rem = n % 1_000L
+
+    if (billions > 0) parts.add("$billions میلیارد")
+    if (millions > 0) parts.add("$millions میلیون")
+    if (thousands > 0) parts.add("$thousands هزار")
+    if (rem > 0) parts.add("$rem")
+
+    return parts.joinToString(" و ") + " تومان"
+}
 
 val DEFAULT_PROJECTS = listOf("ساخت خانه", "ماه‌های گذشته", "تعمیرات و بازسازی")
 val PROJECT_CATEGORIES = listOf(
@@ -107,8 +124,8 @@ fun ProjectExpensesScreen(vm: MainVm) {
                 HeroCard(
                     title = if (selectedProj.isEmpty()) "جمع کل پروژه‌ها و خرج‌های گذشته" else "جمع پروژه: $selectedProj",
                     value = totalFiltered,
-                    leftLabel = "تعداد ردیف‌ها",
-                    leftValue = "${filtered.size} مورد",
+                    leftLabel = "به حروف",
+                    leftValue = amountInWords(totalFiltered).ifEmpty { "۰ تومان" },
                     rightLabel = "کل همه پروژه‌ها",
                     rightValue = fmt(totalAll)
                 )
@@ -149,7 +166,14 @@ fun ProjectExpensesScreen(vm: MainVm) {
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Text("$c ($pct٪)", style = MaterialTheme.typography.bodyMedium)
-                                    Text(fmt(sum), fontWeight = FontWeight.SemiBold, color = ExpenseColor)
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(fmt(sum), fontWeight = FontWeight.SemiBold, color = ExpenseColor)
+                                        Text(
+                                            amountInWords(sum),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                             if (selectedCat.isNotEmpty()) {
@@ -206,11 +230,18 @@ fun ProjectExpensesScreen(vm: MainVm) {
                             )
                         }
                         Spacer(Modifier.width(8.dp))
-                        Text(
-                            fmt(item.amount),
-                            fontWeight = FontWeight.Bold,
-                            color = ExpenseColor
-                        )
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                fmt(item.amount),
+                                fontWeight = FontWeight.Bold,
+                                color = ExpenseColor
+                            )
+                            Text(
+                                amountInWords(item.amount),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
@@ -267,6 +298,8 @@ fun ProjectExpenseDialog(
     var note by remember { mutableStateOf(base?.note ?: "") }
     var err by remember { mutableStateOf("") }
     var confirmDel by remember { mutableStateOf(false) }
+
+    val parsedAmt = parseProjectAmount(amountText) ?: 0L
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -326,6 +359,58 @@ fun ProjectExpenseDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                // نمایش زنده مبلغ با ویرگول و حروف (هزار، میلیون، میلیارد)
+                if (parsedAmt > 0L) {
+                    Card(
+                        Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                "${fmt(parsedAmt)} تومان",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Text(
+                                "معادل: ${amountInWords(parsedAmt)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+
+                // دکمه‌های کمکی برای افزودن سریع صفرها
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    AssistChip(
+                        onClick = {
+                            val baseNum = if (parsedAmt > 0L) parsedAmt else 1L
+                            amountText = (baseNum * 1_000L).toString()
+                        },
+                        label = { Text("+ ۳ صفر (هزار)") }
+                    )
+                    AssistChip(
+                        onClick = {
+                            val baseNum = if (parsedAmt > 0L) parsedAmt else 1L
+                            amountText = (baseNum * 1_000_000L).toString()
+                        },
+                        label = { Text("+ ۶ صفر (میلیون)") }
+                    )
+                    AssistChip(
+                        onClick = {
+                            val baseNum = if (parsedAmt > 0L) parsedAmt else 1L
+                            amountText = (baseNum * 1_000_000_000L).toString()
+                        },
+                        label = { Text("+ ۹ صفر (میلیارد)") }
+                    )
+                }
 
                 OutlinedTextField(
                     value = dateText,
